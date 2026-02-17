@@ -22,25 +22,8 @@ module ScriptHs.Parser (
     parseScript,
 ) where
 
-import Control.Applicative (many, (<|>))
-import Control.Monad (void, when)
-import Data.Attoparsec.Text (
-    Parser,
-    atEnd,
-    char,
-    endOfInput,
-    isHorizontalSpace,
-    parseOnly,
-    satisfy,
-    skipWhile,
-    string,
-    takeWhile,
-    takeWhile1,
-    (<?>),
- )
 import Data.Text (Text)
 import qualified Data.Text as T
-import Prelude hiding (takeWhile)
 
 {- | A fully parsed script, consisting of aggregated cabal metadata and an
 ordered list of code lines.
@@ -101,15 +84,13 @@ Right (ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], m
 >>> parseScript ""
 Right (ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = []}, scriptLines = []})
 -}
-parseScript :: Text -> Either String ScriptFile
-parseScript = parseOnly scriptFileP
-
-scriptFileP :: Parser ScriptFile
-scriptFileP = do
-    ls <- many lineP <* endOfInput
-    let (metas, code) = partitionLines ls
+parseScript :: Text -> ScriptFile
+parseScript input =
+    let textLines = T.lines input
+        parsedLines = map parseLine textLines
+        (metas, code) = partitionLines parsedLines
         meta = mergeMetas metas
-    pure (ScriptFile{scriptMeta = meta, scriptLines = code})
+     in ScriptFile{scriptMeta = meta, scriptLines = code}
 
 data RawLine
     = RawCabalMeta CabalMeta
@@ -129,69 +110,63 @@ mergeMetas ms =
         , metaGhcOptions = concatMap metaGhcOptions ms
         }
 
-lineP :: Parser RawLine
-lineP = do
-    end <- atEnd
-    when end (fail "unexpected end of input")
-    (RawCabalMeta <$> cabalMetaP <|> RawCode <$> codeLineP)
-        <?> "line"
+parseLine :: Text -> RawLine
+parseLine line
+    | Just meta <- parseCabalMeta line = RawCabalMeta meta
+    | otherwise = RawCode (parseCodeLine line)
 
-cabalMetaP :: Parser CabalMeta
-cabalMetaP = do
-    _ <- string "-- cabal:"
-    skipWhile isHorizontalSpace
-    key <- takeWhile1 (/= ':')
-    _ <- char ':'
-    skipWhile isHorizontalSpace
-    values <- restOfLine
-    let items = map T.strip (T.splitOn "," values)
-    pure $ case T.strip key of
-        "build-depends" -> emptyCabal{metaDeps = items}
-        "default-extensions" -> emptyCabal{metaExts = items}
-        "ghc-options" -> emptyCabal{metaGhcOptions = items}
-        _ -> emptyCabal
+parseCabalMeta :: Text -> Maybe CabalMeta
+parseCabalMeta line = do
+    rest <- T.stripPrefix "-- cabal:" line
+    let rest' = T.stripStart rest
+    case T.break (== ':') rest' of
+        (key, colonAndValue) | not (T.null colonAndValue) -> do
+            let value = T.stripStart (T.drop 1 colonAndValue)
+                items = map T.strip (T.splitOn "," value)
+            pure $ case T.strip key of
+                "build-depends" -> emptyCabal{metaDeps = items}
+                "default-extensions" -> emptyCabal{metaExts = items}
+                "ghc-options" -> emptyCabal{metaGhcOptions = items}
+                _ -> emptyCabal
+        _ -> Nothing
   where
     emptyCabal = CabalMeta{metaDeps = [], metaExts = [], metaGhcOptions = []}
 
-codeLineP :: Parser Line
-codeLineP =
-    Blank <$ blankLineP
-        <|> GhciCommand <$> ghciCommandP
-        <|> Pragma <$> pragmaP
-        <|> Import <$> importP
-        <|> HaskellLine <$> restOfLine
+parseCodeLine :: Text -> Line
+parseCodeLine line
+    | isBlankLine line = Blank
+    | Just cmd <- parseGhciCommand line = GhciCommand cmd
+    | Just pragma <- parsePragma line = Pragma pragma
+    | Just imp <- parseImport line = Import imp
+    | otherwise = HaskellLine (rewriteSplice line)
 
-blankLineP :: Parser ()
-blankLineP = skipWhile isHorizontalSpace *> void (char '\n')
+isBlankLine :: Text -> Bool
+isBlankLine = T.null . T.strip
 
--- TODO: mchavinda - This will parse multiple braces
--- as GHCi directives. It's a rare corner case but we
--- fix it in the future.
-ghciCommandP :: Parser Text
-ghciCommandP = do
-    skipWhile isHorizontalSpace
-    _ <- char ':'
-    rest <- restOfLine
-    pure (":" <> rest)
+parseGhciCommand :: Text -> Maybe Text
+parseGhciCommand line =
+    let stripped = T.stripStart line
+     in case T.uncons stripped of
+            Just (':', rest) -> Just (":" <> rest)
+            _ -> Nothing
 
-pragmaP :: Parser Text
-pragmaP = do
-    s <- string "{-#"
-    rest <- restOfLine
-    pure (s <> rest)
+parsePragma :: Text -> Maybe Text
+parsePragma line =
+    if "{-#" `T.isPrefixOf` line
+        then Just line
+        else Nothing
 
-importP :: Parser Text
-importP = do
-    s <- string "import"
-    c <- satisfy (\ch -> ch == ' ' || ch == '\t')
-    rest <- restOfLine
-    pure (s <> T.singleton c <> rest)
+parseImport :: Text -> Maybe Text
+parseImport line =
+    case T.stripPrefix "import" line of
+        Just rest
+            | not (T.null rest) && (T.head rest == ' ' || T.head rest == '\t') ->
+                Just line
+        _ -> Nothing
 
-restOfLine :: Parser Text
-restOfLine = do
-    t <- takeWhile (/= '\n')
-    void (char '\n') <|> endOfInput
-    -- https://discourse.haskell.org/t/injecting-variables-into-a-ghci-session/12558/2?u=mchav
-    case T.stripPrefix "$(" t >>= T.stripSuffix ")" of
-        Just inner -> pure $ "_ = (); " <> T.strip inner
-        _ -> pure t
+-- https://discourse.haskell.org/t/injecting-variables-into-a-ghci-session/12558/2?u=mchav
+rewriteSplice :: Text -> Text
+rewriteSplice line =
+    case T.stripPrefix "$(" line >>= T.stripSuffix ")" of
+        Just inner -> "_ = (); " <> T.strip inner
+        Nothing -> line
