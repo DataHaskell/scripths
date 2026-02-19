@@ -20,6 +20,7 @@ module ScriptHs.Parser (
     CabalMeta (..),
     Line (..),
     parseScript,
+    mergeMetas,
 ) where
 
 import Data.Text (Text)
