@@ -1,13 +1,20 @@
 module Test.Markdown (markdownTests) where
 
-import Test.Tasty ( TestTree, testGroup )
-import Test.Tasty.HUnit
-    ( testCase, (@?=), assertFailure, assertBool )
+import Test.Tasty (TestTree, testGroup)
+import Test.Tasty.HUnit (
+    assertBool,
+    assertFailure,
+    testCase,
+    (@?=),
+ )
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import ScriptHs.Markdown
-    ( Segment(CodeBlock, Prose), parseMarkdown, reassemble )
+import ScriptHs.Markdown (
+    Segment (CodeBlock, Prose),
+    parseMarkdown,
+    reassemble,
+ )
 
 markdownTests :: TestTree
 markdownTests =
@@ -63,7 +70,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [CodeBlock {}, Prose _] -> pure ()
+                    [CodeBlock{}, Prose _] -> pure ()
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "multiple code blocks" $ do
                 let input =
@@ -81,7 +88,7 @@ markdownTests =
                             , "```"
                             ]
                 let segs = parseMarkdown input
-                let codeBlocks = [c | c@(CodeBlock {}) <- segs]
+                let codeBlocks = [c | c@(CodeBlock{}) <- segs]
                 length codeBlocks @?= 2
             , testCase "non-haskell code block preserved" $ do
                 let input =

@@ -1,23 +1,23 @@
 module Test.Notebook (notebookTests) where
 
 import Test.Tasty (TestTree, testGroup)
-import Test.Tasty.HUnit (testCase, (@?=), assertBool, assertFailure)
+import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 import qualified Data.Text as T
 
-import ScriptHs.Markdown (Segment(..))
-import ScriptHs.Notebook
-    ( addOutputToSegments
-    , generatedMarkedScript
-    , isHaskell
-    , mkIndexedCodeSegments
-    , mkMarker
-    , parseBlocks
-    , processNotebook
-    , splitByMarkers
-    )
+import ScriptHs.Markdown (Segment (..))
+import ScriptHs.Notebook (
+    addOutputToSegments,
+    generatedMarkedScript,
+    isHaskell,
+    mkIndexedCodeSegments,
+    mkMarker,
+    parseBlocks,
+    processNotebook,
+    splitByMarkers,
+ )
 
-import ScriptHs.Parser (Line(..), CabalMeta(metaDeps))
+import ScriptHs.Parser (CabalMeta (metaDeps), Line (..))
 
 notebookTests :: TestTree
 notebookTests =
@@ -141,10 +141,12 @@ notebookTests =
                 let m10 = mkMarker 10
                     m11 = mkMarker 11
 
-                assertBool "has putStrLn marker 10"
+                assertBool
+                    "has putStrLn marker 10"
                     (HaskellLine ("putStrLn " <> T.pack (show (T.unpack m10))) `elem` ls)
 
-                assertBool "has putStrLn marker 11"
+                assertBool
+                    "has putStrLn marker 11"
                     (HaskellLine ("putStrLn " <> T.pack (show (T.unpack m11))) `elem` ls)
 
                 assertBool "has Blank separators" (Blank `elem` ls)
@@ -168,7 +170,6 @@ notebookTests =
                         assertBool "block 2 non-empty lines" (not (null ls2))
                         assertBool "block 3 non-empty lines" (not (null ls3))
                     other -> assertFailure $ "unexpected indexedBlocks: " ++ show other
-
             , testCase "no haskell blocks => empty indexedBlocks and empty-ish meta" $ do
                 let segs =
                         [ (0, Prose "intro\n")
