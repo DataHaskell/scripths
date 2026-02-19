@@ -75,7 +75,7 @@ resolveDeps :: FilePath -> [T.Text] -> IO ()
 resolveDeps _ [] = pure ()
 resolveDeps envPath deps = do
     let args =
-            ["-v0", "install", "--lib", "--package-env=" ++ envPath]
+            ["-v0", "install", "--lib", "--package-env=" ++ envPath, "--force-reinstalls"]
                 ++ map T.unpack deps
         cp = (proc "cabal" args){delegate_ctlc = True}
     (_, _, _, ph) <- createProcess cp
