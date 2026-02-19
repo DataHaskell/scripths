@@ -19,6 +19,8 @@ library
     import:           warnings
     exposed-modules:  ScriptHs.Parser,
                       ScriptHs.Render,
+                      ScriptHs.Markdown,
+                      ScriptHs.Notebook,
                       ScriptHs.Run
     build-depends:    base >= 4 && < 5,
                       filepath >= 1.4 && < 1.6,
@@ -35,6 +37,7 @@ executable scripths
     build-depends:
         base >= 4 && < 5,
         scripths,
+        filepath >= 1.4 && < 1.6,
         text >= 2.0 && < 3,
 
     hs-source-dirs:   app
@@ -47,7 +50,9 @@ test-suite scripths-test
     hs-source-dirs:   test
     main-is:          Main.hs
     other-modules:    Test.Parser,
-                      Test.Render
+                      Test.Render,
+                      Test.Markdown,
+                      Test.Notebook
     build-depends:
         base >= 4 && < 5,
         scripths,

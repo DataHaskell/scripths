@@ -1,0 +1,10 @@
+double :: Int -> Int
+double = (*2)
+
+-- cabal: build-depends: text
+:set -XOverloadedStrings
+import qualified Data.Text as T
+
+T.take 10 "hello"
+
+double 5

@@ -1,7 +1,9 @@
 module Main (main) where
 
-import Test.Tasty
+import Test.Tasty (defaultMain, testGroup)
 
+import Test.Markdown (markdownTests)
+import Test.Notebook (notebookTests)
 import Test.Parser (parseTests)
 import Test.Render (renderTests)
 
@@ -12,4 +14,6 @@ main =
             "ScriptHs"
             [ parseTests
             , renderTests
+            , markdownTests
+            , notebookTests
             ]
