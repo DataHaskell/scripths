@@ -38,7 +38,7 @@ createScriptAndEnvironment sf tmpDir = do
         envPath = tmpDir </> ".ghc.environment"
         sm = scriptMeta sf
     TIO.writeFile ghciPath (toGhciScript (scriptLines sf))
-    resolveDeps envPath (metaDeps sm)
+    resolveDeps envPath (metaDeps sm <> ["base"])
     pure (ghciPath, envPath)
 
 captureGhc :: FilePath -> CabalMeta -> FilePath -> IO T.Text
