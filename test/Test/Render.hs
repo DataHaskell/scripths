@@ -69,6 +69,29 @@ renderTests =
                             ]
                 let blocks = splitBlocks result
                 length blocks @?= 1
+            , testCase "consecutive do-notation lines grouped" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "do"
+                            , HaskellLine "  x <- pure 5"
+                            , HaskellLine "  y <- pure 10"
+                            , HaskellLine "  pure $ x + y"
+                            ]
+                let blocks = splitBlocks result
+                length blocks @?= 1
+            , testCase "consecutive do-notation lines with space are grouped" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "do"
+                            , HaskellLine "  x <- pure 5"
+                            , -- indentation should ignore these blank lines.
+                              Blank
+                            , Blank
+                            , HaskellLine "  y <- pure 10"
+                            , HaskellLine "  pure $ x + y"
+                            ]
+                let blocks = splitBlocks result
+                length blocks @?= 1
             , testCase "blank separates blocks" $ do
                 let result =
                         toGhciScript

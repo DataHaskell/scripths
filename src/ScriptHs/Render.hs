@@ -62,7 +62,16 @@ groupRaw (Blank : rest) = SingleLine Blank : groupRaw rest
 groupRaw (GhciCommand t : rest) = SingleLine (GhciCommand t) : groupRaw rest
 groupRaw ls =
     let (block, rest) = span isBlockLine ls
-     in classifyBlock block : groupRaw rest
+        (block', rest') = takeIfIndented block rest
+     in classifyBlock block' : groupRaw rest'
+
+takeIfIndented :: [Line] -> [Line] -> ([Line], [Line])
+takeIfIndented block rest = (block ++ takeWhile isIndented rest, dropWhile isIndented rest)
+
+isIndented :: Line -> Bool
+isIndented Blank = True
+isIndented (HaskellLine t) = T.isPrefixOf " " t || T.isPrefixOf "\t" t
+isIndented _ = False
 
 splitIOBinds :: Block -> [Block]
 splitIOBinds (MultiLine ls) = map classifyBlock (splitOn isIOLine ls)
@@ -111,9 +120,11 @@ lineText (HaskellLine t) = t
 
 isIOorTH :: Text -> Bool
 isIOorTH t =
-    T.isInfixOf "<-" t
-        || T.isInfixOf "$(" t
-        || T.isPrefixOf "_ = ();" (T.stripStart t)
+    not (T.isPrefixOf " " t)
+        && ( T.isInfixOf "<-" t
+                || T.isInfixOf "$(" t
+                || T.isPrefixOf "_ = ();" (T.stripStart t)
+           )
 
 allIOorTH :: [Line] -> Bool
 allIOorTH = all (isIOorTH . lineText)
