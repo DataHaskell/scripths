@@ -44,8 +44,6 @@ createScriptAndEnvironment sf tmpDir = do
 captureGhc :: FilePath -> CabalMeta -> FilePath -> IO T.Text
 captureGhc env meta ghciPath = do
     let args = ghcArgs env meta ghciPath
-    contents <- TIO.readFile ghciPath
-    TIO.putStrLn contents
     (code, out, err) <- readProcessWithExitCode "ghc" args ""
     case code of
         ExitSuccess -> pure (T.pack $ out <> err)
