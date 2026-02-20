@@ -18,11 +18,13 @@ import ScriptHs.Run (runScriptCapture)
 type IndexedSegments = [(Int, Segment)]
 type IndexedBlocks = [(Int, [Line])]
 
-runNotebook :: FilePath -> IO ()
-runNotebook path = do
+runNotebook :: FilePath -> Maybe FilePath -> IO ()
+runNotebook path outputPath = do
     contents <- TIO.readFile path
     outputMd <- processNotebook contents
-    TIO.putStr outputMd
+    case outputPath of
+        Nothing -> TIO.putStr outputMd
+        Just output -> TIO.writeFile output outputMd
 
 processNotebook :: Text -> IO Text
 processNotebook contents = do
