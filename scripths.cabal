@@ -2,7 +2,7 @@ cabal-version:      3.0
 name:               scripths
 version:            0.1.0.0
 synopsis:           GHCi scripts for standalone execution and Markdown documentation.
-description:        GHCi scripts for standalone execution and Markdown documentation.
+description:        GHCi scripts for standalone execution (with dependency resolution) and Markdown documentation (produces inline output).
 homepage:           https://www.datahaskell.org/
 license:            MIT
 license-file:       LICENSE
@@ -11,6 +11,12 @@ maintainer:         mschavinda@gmail.com
 category:           Data
 build-type:         Simple
 extra-doc-files:    CHANGELOG.md, README.md
+tested-with:        GHC ==9.6.7
+bug-reports:        https://github.com/DataHaskell/scripths/issues
+
+source-repository head
+  type:     git
+  location: https://github.com/DataHaskell/scripths
 
 common warnings
     ghc-options: -Wall
