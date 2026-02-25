@@ -1,6 +1,6 @@
 module Main where
 
-import Data.List ( isPrefixOf )
+import Data.List (isPrefixOf)
 import qualified Data.Text.IO as TIO
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitFailure)

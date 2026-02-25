@@ -35,7 +35,13 @@ fence :: Text
 fence = "```"
 
 fenceCodeSegment :: Text -> Text -> Text
-fenceCodeSegment lang output = "\n" <> fence <> lang <> "\n" <> output <> fence <> "\n"
+fenceCodeSegment lang output
+    | T.null output = ""
+    | otherwise = T.unlines ["", fence <> lang, ensureNewLine output, fence, ""]
+  where
+    ensureNewLine t
+        | "\n" `T.isSuffixOf` t = t
+        | otherwise = T.snoc t '\n'
 
 reassemble :: [Segment] -> Text
 reassemble = T.concat . map renderSegment
