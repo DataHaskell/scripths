@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               scripths
-version:            0.1.0.1
+version:            0.1.0.2
 synopsis:           GHCi scripts for standalone execution and Markdown documentation.
 description:        GHCi scripts for standalone execution (with dependency resolution) and Markdown documentation (produces inline output).
 homepage:           https://www.datahaskell.org/

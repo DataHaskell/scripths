@@ -16,7 +16,7 @@ renderTests =
             "Single lines"
             [ testCase "plain expression stays unwrapped" $ do
                 let result = toGhciScript [HaskellLine "print 42"]
-                assertNotWrapped result
+                assertWrapped result ["print 42"]
             , testCase "import stays unwrapped" $ do
                 let result = toGhciScript [Import "import Data.Text"]
                 assertNotWrapped result
@@ -55,8 +55,8 @@ renderTests =
                             ]
                 let blocks = splitBlocks result
                 assertBool
-                    ("expected 1 block, got " ++ show (length blocks) ++ ": " ++ show blocks)
-                    (length blocks == 1)
+                    ("expected 3 blocks, got " ++ show (length blocks) ++ ": " ++ show blocks)
+                    (length blocks == 3)
             ]
         , testGroup
             "Multi-line blocks"

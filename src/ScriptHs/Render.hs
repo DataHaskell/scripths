@@ -101,9 +101,7 @@ renderBlock (SingleLine Blank) = [""]
 renderBlock (SingleLine (GhciCommand t)) = [t]
 renderBlock (SingleLine (Pragma t)) = [t]
 renderBlock (SingleLine (Import t)) = [t]
-renderBlock (SingleLine (HaskellLine t))
-    | isIOorTH t = wrapMulti [t]
-    | otherwise = [t]
+renderBlock (SingleLine (HaskellLine t)) = wrapMulti [t]
 renderBlock (MultiLine ls)
     | allIOorTH ls = concatMap (\l -> wrapMulti [lineText l]) ls
     | otherwise = wrapMulti (map lineText ls)
