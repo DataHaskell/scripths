@@ -38,7 +38,7 @@ outputFile ("-o" : f : _) = Just f
 outputFile (x : xs) =
     if "--output=" `isPrefixOf` x
         then Just (drop (length "--output=") x)
-        else outputFile (tail xs)
+        else outputFile (drop 1 xs)
 
 usage :: IO ()
 usage = do
