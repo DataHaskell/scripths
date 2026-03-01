@@ -5,7 +5,7 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 import qualified Data.Text as T
 
-import ScriptHs.Markdown (Segment (..))
+import ScriptHs.Markdown (CodeOutput (..), MimeType (..), Segment (..))
 import ScriptHs.Notebook (
     addOutputToSegments,
     generatedMarkedScript,
@@ -110,7 +110,13 @@ notebookTests =
                         [ (0, Prose "intro\n")
                         , (1, CodeBlock "haskell" "print 1\n" Nothing)
                         , (2, CodeBlock "python" "print('x')\n" Nothing)
-                        , (3, CodeBlock "hs" "print 3\n" (Just "old-should-be-replaced"))
+                        ,
+                            ( 3
+                            , CodeBlock
+                                "hs"
+                                "print 3\n"
+                                (Just $ CodeOutput MimePlain "old-should-be-replaced")
+                            )
                         , (4, Prose "outro\n")
                         ]
 
@@ -121,8 +127,9 @@ notebookTests =
                 head result @?= Prose "intro\n"
                 result !! 4 @?= Prose "outro\n"
 
-                result !! 1 @?= CodeBlock "haskell" "print 1\n" (Just "out-1")
-                result !! 3 @?= CodeBlock "hs" "print 3\n" (Just "out-3")
+                result !! 1
+                    @?= CodeBlock "haskell" "print 1\n" (Just $ CodeOutput MimePlain "out-1")
+                result !! 3 @?= CodeBlock "hs" "print 3\n" (Just $ CodeOutput MimePlain "out-3")
 
                 result !! 2 @?= CodeBlock "python" "print('x')\n" Nothing
             ]

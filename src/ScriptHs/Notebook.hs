@@ -5,7 +5,13 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
-import ScriptHs.Markdown (Segment (..), parseMarkdown, reassemble)
+import ScriptHs.Markdown (
+    CodeOutput (..),
+    MimeType (..),
+    Segment (..),
+    parseMarkdown,
+    reassemble,
+ )
 import ScriptHs.Parser (
     CabalMeta (..),
     Line (..),
@@ -47,7 +53,7 @@ addOutputToSegments :: [(Int, Text)] -> IndexedSegments -> [Segment]
 addOutputToSegments outputs = map addOutput
   where
     addOutput :: (Int, Segment) -> Segment
-    addOutput (i, CodeBlock lang code _) = CodeBlock lang code (lookup i outputs)
+    addOutput (i, CodeBlock lang code _) = CodeBlock lang code (fmap (CodeOutput MimePlain) (lookup i outputs))
     addOutput (_, seg) = seg
 
 mkIndexedCodeSegments :: IndexedSegments -> IndexedSegments

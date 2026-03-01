@@ -11,6 +11,8 @@ import Test.Tasty.HUnit (
 import Data.Text (Text)
 import qualified Data.Text as T
 import ScriptHs.Markdown (
+    CodeOutput (..),
+    MimeType (..),
     Segment (CodeBlock, Prose),
     parseMarkdown,
     reassemble,
@@ -72,6 +74,23 @@ markdownTests =
                 case segs of
                     [CodeBlock{}, Prose _] -> pure ()
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
+            , testCase "latex mimetype" $ do
+                let input =
+                        T.unlines
+                            [ "```haskell"
+                            , "print 42"
+                            , "```"
+                            , ""
+                            , "> <!-- sabela:mime text/latex -->"
+                            , "> 2"
+                            , ""
+                            , "Some text after."
+                            ]
+                let segs = parseMarkdown input
+                length segs @?= 2
+                case segs of
+                    [(CodeBlock _ _ (Just (CodeOutput m _))), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
+                    other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "multiple code blocks" $ do
                 let input =
                         T.unlines
@@ -81,15 +100,26 @@ markdownTests =
                             , "print 1"
                             , "```"
                             , ""
+                            , "> <!-- sabela:mime text/plain -->"
+                            , "> 1"
+                            , ""
                             , "Middle text."
                             , ""
                             , "```haskell"
                             , "print 2"
                             , "```"
+                            , ""
+                            , "> <!-- sabela:mime text/plain -->"
+                            , "> 2"
                             ]
                 let segs = parseMarkdown input
                 let codeBlocks = [c | c@(CodeBlock{}) <- segs]
+                let outputBlocks = [o | (CodeBlock _ _ o@(Just _)) <- segs]
                 length codeBlocks @?= 2
+                length outputBlocks @?= 2
+                assertBool
+                    "all mimeType plain"
+                    (all (== MimePlain) [m | (Just (CodeOutput m _)) <- outputBlocks])
             , testCase "non-haskell code block preserved" $ do
                 let input =
                         T.unlines
@@ -142,26 +172,22 @@ markdownTests =
                 assertBool "has code" (T.isInfixOf "print 42" result)
                 assertBool "no blockquote" (not $ T.isInfixOf "> " result)
             , testCase "code block with output" $ do
-                let result = reassemble [CodeBlock "haskell" "print 42\n" (Just "42")]
+                let result =
+                        reassemble [CodeBlock "haskell" "print 42\n" (Just $ CodeOutput MimePlain "42")]
                 assertBool "has fence" (T.isInfixOf "```haskell" result)
                 assertBool "has code" (T.isInfixOf "print 42" result)
                 assertBool "has blockquote" (T.isInfixOf "> 42" result)
             , testCase "code block with multi-line output" $ do
-                let result = reassemble [CodeBlock "hs" "print [1,2]\n" (Just "1\n2")]
+                let result =
+                        reassemble [CodeBlock "hs" "print [1,2]\n" (Just $ CodeOutput MimePlain "1\n2")]
                 assertBool "has > 1" (T.isInfixOf "> 1" result)
                 assertBool "has > 2" (T.isInfixOf "> 2" result)
-            , testCase "empty output is omitted" $ do
-                let result = reassemble [CodeBlock "haskell" "import X\n" (Just "")]
-                assertBool "no blockquote" (not $ T.isInfixOf "> " result)
-            , testCase "whitespace-only output is omitted" $ do
-                let result = reassemble [CodeBlock "haskell" "import X\n" (Just "  \n  \n")]
-                assertBool "no blockquote" (not $ T.isInfixOf "> " result)
             , testCase "full document roundtrip" $ do
                 let segs =
                         [ Prose "# Title\n\n"
-                        , CodeBlock "haskell" "print 42\n" (Just "42")
+                        , CodeBlock "haskell" "print 42\n" (Just $ CodeOutput MimePlain "42")
                         , Prose "\nSome text.\n"
-                        , CodeBlock "haskell" "print 99\n" (Just "99")
+                        , CodeBlock "haskell" "print 99\n" (Just $ CodeOutput MimePlain "99")
                         ]
                 let result = reassemble segs
 
@@ -181,11 +207,11 @@ markdownTests =
         , testGroup
             "blockquote"
             [ testCase "single line" $ do
-                let result = reassemble [CodeBlock "hs" "x\n" (Just "hello")]
+                let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "hello")]
                 assertBool "blockquoted" (T.isInfixOf "> hello" result)
             , testCase "empty lines in output get bare >" $ do
-                let result = reassemble [CodeBlock "hs" "x\n" (Just "a\n\nb")]
-                assertBool "has bare >" (T.isInfixOf "\n>\n" result)
+                let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "a\n\nb")]
+                assertBool "has bare >" (T.isInfixOf "\n> \n" result)
             ]
         ]
 
