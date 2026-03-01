@@ -1,5 +1,11 @@
 # Revision history for scripths
 
+## 0.2.0.0 -- 2026-03-01
+
+* Add mime type to output.
+
+* Make blocks out of single lines of code as well.
+
 ## 0.1.0.2 -- 2026-02-28
 
 * Make blocks out of single lines of code as well.
