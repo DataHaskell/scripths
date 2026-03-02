@@ -1,5 +1,9 @@
 # Revision history for scripths
 
+## 0.2.0.1 -- 2026-03-01
+
+* Fix issue with SVG mime type.
+
 ## 0.2.0.0 -- 2026-03-01
 
 * Add mime type to output.
