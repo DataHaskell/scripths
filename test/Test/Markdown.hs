@@ -91,6 +91,23 @@ markdownTests =
                 case segs of
                     [(CodeBlock _ _ (Just (CodeOutput m _))), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
+            , testCase "svg mimetype" $ do
+                let input =
+                        T.unlines
+                            [ "```haskell"
+                            , "print 42"
+                            , "```"
+                            , ""
+                            , "> <!-- sabela:mime image/svg+xml -->"
+                            , "> <svg></svg>"
+                            , ""
+                            , "Some text after."
+                            ]
+                let segs = parseMarkdown input
+                length segs @?= 2
+                case segs of
+                    [(CodeBlock _ _ (Just (CodeOutput m _))), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
+                    other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "multiple code blocks" $ do
                 let input =
                         T.unlines

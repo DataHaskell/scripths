@@ -101,7 +101,7 @@ mimeFromTag :: Text -> MimeType
 mimeFromTag t
     | T.isInfixOf "text/html" t = MimeHtml
     | T.isInfixOf "text/markdown" t = MimeMarkdown
-    | T.isInfixOf "image/svg+html" t = MimeSvg
+    | T.isInfixOf "image/svg+xml" t = MimeSvg
     | T.isInfixOf "text/latex" t = MimeLatex
     | T.isInfixOf "application/json" t = MimeJson
     | T.isInfixOf "base64" t =
