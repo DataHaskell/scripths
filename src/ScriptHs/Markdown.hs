@@ -39,7 +39,7 @@ parseMarkdown' acc (line : rest) = case T.strip <$> T.stripPrefix fence line of
         let
             prose = T.unlines acc
             (codeLines, rest') = fmap (drop 1) (break ((== fence) . T.strip) rest)
-            (output, rest'') = case (dropWhile ((== "") . T.strip) rest') of
+            (output, rest'') = case dropWhile ((== "") . T.strip) rest' of
                 (x : xs) ->
                     if not (T.isPrefixOf "> <!-- sabela:mime" x)
                         then (Nothing, rest')
@@ -63,12 +63,8 @@ fence = "```"
 
 fenceCodeSegment :: Text -> Text -> Text
 fenceCodeSegment lang output
-    | T.null output = ""
-    | otherwise = T.unlines ["", fence <> lang, ensureNewLine output, fence, ""]
-  where
-    ensureNewLine t
-        | "\n" `T.isSuffixOf` t = t
-        | otherwise = T.snoc t '\n'
+    | T.null (T.strip output) = ""
+    | otherwise = T.unlines ["", fence <> lang, T.stripEnd output, fence, ""]
 
 reassemble :: [Segment] -> Text
 reassemble = T.concat . map renderSegment
@@ -81,7 +77,7 @@ renderSegment (CodeBlock lang code (Just output)) = fenceCodeSegment lang code <
 blockQuote :: CodeOutput -> Text
 blockQuote (CodeOutput mimeType t) =
     let
-        ls = ["<!-- sabela:mime " <> mimeIndicator mimeType <> " -->"] ++ T.lines t
+        ls = ("<!-- sabela:mime " <> mimeIndicator mimeType <> " -->") : T.lines t
         trimmed = reverse $ dropWhile T.null $ reverse ls
         quoted = T.unlines $ map (\l -> if T.null l then "> " else "> " <> l) trimmed
      in

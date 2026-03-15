@@ -1,5 +1,9 @@
 # Revision history for scripths
 
+## 0.2.0.2 -- 2026-03-14
+
+* Stop adding extra white space to code cells.
+
 ## 0.2.0.1 -- 2026-03-01
 
 * Fix issue with SVG mime type.
