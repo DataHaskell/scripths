@@ -26,7 +26,7 @@ dispatch path outputPath =
         _ -> do
             contents <- TIO.readFile path
             let sf = parseScript contents
-            runScript sf
+            runScript path sf
 
 -- TODO: This is kinda brittle but I don't wanna
 -- include the whole opt parser lib just to

@@ -27,24 +27,25 @@ type IndexedBlocks = [(Int, [Line])]
 runNotebook :: FilePath -> Maybe FilePath -> IO ()
 runNotebook path outputPath = do
     contents <- TIO.readFile path
-    outputMd <- processNotebook contents
+    outputMd <- processNotebook path contents
     case outputPath of
         Nothing -> TIO.putStr outputMd
         Just output -> TIO.writeFile output outputMd
 
-processNotebook :: Text -> IO Text
-processNotebook contents = do
+processNotebook :: FilePath -> Text -> IO Text
+processNotebook notebookPath contents = do
     let indexedSegments = zip [0 ..] (parseMarkdown contents)
         (metas, indexedCodeBlocks) = parseBlocks indexedSegments
     if null indexedCodeBlocks
         then pure contents
-        else executeCodeCells metas indexedSegments indexedCodeBlocks
+        else executeCodeCells notebookPath metas indexedSegments indexedCodeBlocks
 
-executeCodeCells :: CabalMeta -> IndexedSegments -> IndexedBlocks -> IO Text
-executeCodeCells meta allSegments codeBlocks = do
+executeCodeCells ::
+    FilePath -> CabalMeta -> IndexedSegments -> IndexedBlocks -> IO Text
+executeCodeCells notebookPath meta allSegments codeBlocks = do
     let ghciScript = generatedMarkedScript codeBlocks
         sf = ScriptFile{scriptMeta = meta, scriptLines = ghciScript}
-    rawOutput <- runScriptCapture sf
+    rawOutput <- runScriptCapture notebookPath sf
     let outputs = splitByMarkers rawOutput (map fst codeBlocks)
         blocksWithOutput = addOutputToSegments outputs allSegments
     pure $ reassemble blocksWithOutput

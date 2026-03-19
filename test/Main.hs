@@ -6,6 +6,7 @@ import Test.Markdown (markdownTests)
 import Test.Notebook (notebookTests)
 import Test.Parser (parseTests)
 import Test.Render (renderTests)
+import Test.Run (runTests)
 
 main :: IO ()
 main =
@@ -16,4 +17,5 @@ main =
             , renderTests
             , markdownTests
             , notebookTests
+            , runTests
             ]

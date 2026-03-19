@@ -191,7 +191,7 @@ notebookTests =
             "processNotebook"
             [ testCase "no code blocks => returns input unchanged" $ do
                 let input = T.unlines ["# Title", "", "Just prose.", ""]
-                out <- processNotebook input
+                out <- processNotebook "" input
                 out @?= input
             , testCase "non-haskell code blocks only => returns input unchanged" $ do
                 let input =
@@ -204,7 +204,7 @@ notebookTests =
                             , ""
                             , "more prose"
                             ]
-                out <- processNotebook input
+                out <- processNotebook "" input
                 out @?= input
             ]
         ]
