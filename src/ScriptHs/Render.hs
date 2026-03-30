@@ -74,10 +74,62 @@ isIndented (HaskellLine t) = T.isPrefixOf " " t || T.isPrefixOf "\t" t
 isIndented _ = False
 
 splitIOBinds :: Block -> [Block]
-splitIOBinds (MultiLine ls) = map classifyBlock (splitOn isIOLine ls)
+splitIOBinds (MultiLine ls) =
+    concatMap (splitDefIO . classifyBlock) (splitOn isIOLine ls)
   where
     isIOLine l = isIOorTH (lineText l)
 splitIOBinds b = [b]
+
+{- | Split a block that mixes definitions and IO actions.
+  Only splits when there's a clear boundary: a non-indented line
+  without @=@ or @::@ following a line that has @=@ or @::@, or vice versa.
+  Indented lines always attach to the preceding line's group.
+-}
+splitDefIO :: Block -> [Block]
+splitDefIO (MultiLine ls)
+    | hasMix ls = map classifyBlock (groupByKind ls)
+    | otherwise = [MultiLine ls]
+splitDefIO b = [b]
+
+-- | Check if a block has both definitions and IO actions at the top level.
+hasMix :: [Line] -> Bool
+hasMix ls =
+    let topLevel = filter (not . isIndented) ls
+        defs = filter (isDef . lineText) topLevel
+        actions = filter (not . isDef . lineText) topLevel
+     in not (null defs) && not (null actions)
+
+groupByKind :: [Line] -> [[Line]]
+groupByKind [] = []
+groupByKind (l : ls) =
+    let kind = lineKindOf l
+        -- Collect lines of the same kind, plus any indented continuations
+        (same, rest) = spanSameKind kind ls
+     in (l : same) : groupByKind rest
+
+spanSameKind :: Bool -> [Line] -> ([Line], [Line])
+spanSameKind _ [] = ([], [])
+spanSameKind kind (l : ls)
+    | isIndented l =
+        -- Indented lines attach to the current group
+        let (more, rest) = spanSameKind kind ls
+         in (l : more, rest)
+    | lineKindOf l == kind =
+        let (more, rest) = spanSameKind kind ls
+         in (l : more, rest)
+    | otherwise = ([], l : ls)
+
+-- | True if the line looks like a definition (has @=@ or @::@).
+lineKindOf :: Line -> Bool
+lineKindOf l = isDef (lineText l)
+
+isDef :: Text -> Bool
+isDef t =
+    hasTopLevelEquals t || " :: " `T.isInfixOf` t
+
+hasTopLevelEquals :: Text -> Bool
+hasTopLevelEquals t =
+    " = " `T.isInfixOf` t || T.isSuffixOf " =" t
 
 splitOn :: (a -> Bool) -> [a] -> [[a]]
 splitOn _ [] = []

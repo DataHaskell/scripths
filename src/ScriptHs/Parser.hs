@@ -139,7 +139,19 @@ parseCodeLine line
     | Just cmd <- parseGhciCommand line = GhciCommand cmd
     | Just pragma <- parsePragma line = Pragma pragma
     | Just imp <- parseImport line = Import imp
+    | Just stripped <- stripTopLevelLet line = HaskellLine stripped
     | otherwise = HaskellLine (rewriteSplice line)
+
+{- | Strip @let@ from top-level bindings.
+  GHCi's @:{...}@ blocks don't support @let@ at the top level.
+  Preserves @let ... in ...@ expressions and indented @let@ (inside do/where).
+-}
+stripTopLevelLet :: Text -> Maybe Text
+stripTopLevelLet line = do
+    rest <- T.stripPrefix "let " line
+    if " in " `T.isInfixOf` rest
+        then Nothing
+        else Just rest
 
 isBlankLine :: Text -> Bool
 isBlankLine = T.null . T.strip

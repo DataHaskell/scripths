@@ -152,6 +152,56 @@ parseTests =
                     [HaskellLine _] -> pure ()
                     other -> assertFailure $ "expected HaskellLine, got: " ++ show other
             ]
+        , testGroup
+            "Let stripping (don't break)"
+            [ testCase "bare binding unchanged" $ do
+                let sf = parseScript "x = 5\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> t @?= "x = 5"
+                    other -> assertFailure $ "expected HaskellLine, got: " ++ show other
+            , testCase "let-in expression preserved" $ do
+                let sf = parseScript "let x = 1 in x + 1\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> assertBool "has let-in" ("let " `T.isPrefixOf` t && " in " `T.isInfixOf` t)
+                    other -> assertFailure $ "expected HaskellLine, got: " ++ show other
+            , testCase "indented let preserved (inside do/where)" $ do
+                let sf = parseScript "  let x = 5\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> assertBool "still has let" ("let" `T.isInfixOf` t)
+                    other -> assertFailure $ "expected HaskellLine, got: " ++ show other
+            ]
+        , testGroup
+            "Let stripping (new behavior)"
+            [ testCase "top-level let stripped" $ do
+                let sf = parseScript "let x = 5\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> t @?= "x = 5"
+                    other -> assertFailure $ "expected HaskellLine \"x = 5\", got: " ++ show other
+            , testCase "top-level let with complex binding stripped" $ do
+                let sf = parseScript "let foo = bar 1 2\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> t @?= "foo = bar 1 2"
+                    other -> assertFailure $ "expected HaskellLine, got: " ++ show other
+            , testCase "multiple let lines each stripped" $ do
+                let input = T.unlines ["let x = 1", "let y = 2"]
+                let sf = parseScript input
+                let code = filter notBlank (scriptLines sf)
+                case code of
+                    [HaskellLine a, HaskellLine b] -> do
+                        a @?= "x = 1"
+                        b @?= "y = 2"
+                    other -> assertFailure $ "expected two stripped lets, got: " ++ show other
+            , testCase "let-in NOT stripped" $ do
+                let sf = parseScript "let x = 1 in x + 1\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> assertBool "preserved" ("let " `T.isPrefixOf` t)
+                    other -> assertFailure $ "expected HaskellLine, got: " ++ show other
+            , testCase "indented let NOT stripped" $ do
+                let sf = parseScript "  let x = 5\n"
+                case scriptLines sf of
+                    [HaskellLine t] -> assertBool "still has let" ("let " `T.isInfixOf` t)
+                    other -> assertFailure $ "expected HaskellLine with let, got: " ++ show other
+            ]
         ]
 
 notBlank :: Line -> Bool
