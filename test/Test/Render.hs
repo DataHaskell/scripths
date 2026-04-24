@@ -46,6 +46,31 @@ renderTests =
                 assertBool
                     ("expected 2 blocks, got " ++ show (length blocks))
                     (length blocks == 2)
+            , testCase "consecutive IO expression-statements each get own block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "print 1"
+                            , HaskellLine "putStrLn \"hi\""
+                            ]
+                let blocks = splitBlocks result
+                assertBool
+                    ("expected 2 blocks, got " ++ show (length blocks) ++ ": " ++ show blocks)
+                    (length blocks == 2)
+            , testCase "five consecutive putStrLn statements each get own block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine
+                                "putStrLn $ \"Found \" ++ show (length testPrimes) ++ \" primes up to 10000\""
+                            , HaskellLine "putStrLn $ \"Maximum gap: \" ++ show (maximum testGaps)"
+                            , HaskellLine
+                                "putStrLn $ \"Average gap: \" ++ show (fromIntegral (sum testGaps) / fromIntegral (length testGaps) :: Double)"
+                            , HaskellLine "putStrLn $ \"\\nFirst 10 gaps: \" ++ show (take 10 testGaps)"
+                            , HaskellLine "putStrLn $ \"First 20 primes: \" ++ show (take 20 testPrimes)"
+                            ]
+                let blocks = splitBlocks result
+                assertBool
+                    ("expected 5 blocks, got " ++ show (length blocks) ++ ": " ++ show blocks)
+                    (length blocks == 5)
             , testCase "IO bind between pure code splits correctly" $ do
                 let result =
                         toGhciScript
@@ -277,6 +302,58 @@ renderTests =
                 let blocks = splitBlocks result
                 assertBool
                     ("expected 1 block for sig+def, got " ++ show (length blocks))
+                    (length blocks == 1)
+            , testCase "multiple commented + typed functions + do block each stay intact" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "-- Helper function to check if a number is prime"
+                            , HaskellLine "isPrime :: Int -> Bool"
+                            , HaskellLine "isPrime n"
+                            , HaskellLine "  | n < 2 = False"
+                            , HaskellLine "  | n == 2 = True"
+                            , HaskellLine "  | even n = False"
+                            , HaskellLine "  | otherwise = all (\\k -> n `mod` k /= 0) [3, 5 .. isqrt n]"
+                            , HaskellLine "  where isqrt = floor . sqrt . fromIntegral"
+                            , Blank
+                            , HaskellLine "-- Generate list of primes up to n"
+                            , HaskellLine "primesUpTo :: Int -> [Int]"
+                            , HaskellLine "primesUpTo n = filter isPrime [2 .. n]"
+                            , Blank
+                            , HaskellLine "-- Compute gaps between consecutive primes"
+                            , HaskellLine "primeGaps :: [Int] -> [Int]"
+                            , HaskellLine "primeGaps ps = zipWith (-) (tail ps) ps"
+                            , Blank
+                            , HaskellLine "-- Test"
+                            , HaskellLine "do"
+                            , HaskellLine "  let testPrimes = primesUpTo 10"
+                            ]
+                let blocks = splitBlocks result
+                assertBool
+                    ( "expected 4 blocks (one per logical section), got "
+                        ++ show (length blocks)
+                        ++ ": "
+                        ++ show blocks
+                    )
+                    (length blocks == 4)
+            , testCase "comment + type sig + guarded body + where stays together" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "-- Helper function to check if a number is prime"
+                            , HaskellLine "isPrime :: Int -> Bool"
+                            , HaskellLine "isPrime n"
+                            , HaskellLine "  | n < 2 = False"
+                            , HaskellLine "  | n == 2 = True"
+                            , HaskellLine "  | even n = False"
+                            , HaskellLine "  | otherwise = all (\\k -> n `mod` k /= 0) [3, 5 .. isqrt n]"
+                            , HaskellLine "  where isqrt = floor . sqrt . fromIntegral"
+                            ]
+                let blocks = splitBlocks result
+                assertBool
+                    ( "expected 1 block for sig+guarded def, got "
+                        ++ show (length blocks)
+                        ++ ": "
+                        ++ show blocks
+                    )
                     (length blocks == 1)
             ]
         , testGroup
