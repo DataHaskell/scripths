@@ -13,6 +13,7 @@ module ScriptHs.Render (
     toGhciScript,
 ) where
 
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text (Text)
 import qualified Data.Text as T
 import ScriptHs.Parser (Line (..))
@@ -142,7 +143,7 @@ isDeclaration leadText contTexts =
     startsWithDeclKeyword leadText
         || isTypeSig leadText
         || isValueBinding leadText
-        || (isClauseHead leadText && any contHasBinding contTexts)
+        || isClauseHead leadText && any contHasBinding contTexts
 
 startsWithDeclKeyword :: Text -> Bool
 startsWithDeclKeyword t =
@@ -156,9 +157,7 @@ isTypeSig t = case afterLeadIdent t of
     Nothing -> False
 
 isValueBinding :: Text -> Bool
-isValueBinding t = case afterLeadIdent t of
-    Just rest -> hasTopLevelEquals rest
-    Nothing -> False
+isValueBinding t = maybe False hasTopLevelEquals (afterLeadIdent t)
 
 {- | A line like @isPrime n@ — identifier + args, no @=@ / @::@ / @<-@ on
 this line. Only counts as a declaration when accompanied by indented
@@ -177,7 +176,7 @@ isClauseHead t = case afterLeadIdent t of
 contHasBinding :: Text -> Bool
 contHasBinding t =
     let s = T.stripStart t
-     in ("| " `T.isPrefixOf` s && hasTopLevelEquals s)
+     in "| " `T.isPrefixOf` s && hasTopLevelEquals s
             || hasTopLevelEquals t
             || "where" `T.isPrefixOf` s
 
@@ -198,13 +197,13 @@ afterLeadIdent t =
             _ -> Nothing
 
 isIdentStart :: Char -> Bool
-isIdentStart c = c == '_' || (c >= 'a' && c <= 'z')
+isIdentStart c = c == '_' || isAsciiLower c
 
 isIdentCont :: Char -> Bool
 isIdentCont c =
     isIdentStart c
-        || (c >= 'A' && c <= 'Z')
-        || (c >= '0' && c <= '9')
+        || isAsciiUpper c
+        || isDigit c
         || c == '\''
 
 isHaskellKeyword :: Text -> Bool

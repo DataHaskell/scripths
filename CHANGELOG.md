@@ -1,5 +1,9 @@
 # Revision history for scripths
 
+## 0.3.1.0 -- 2026-04-23
+
+* Better block parsing when there are function signatures and comments.
+
 ## 0.3.0.1 -- 2026-03-14
 
 * improve block parsing

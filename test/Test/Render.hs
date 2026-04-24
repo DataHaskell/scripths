@@ -13,7 +13,7 @@ renderTests =
     testGroup
         "Render"
         [ testGroup
-            "Single lines"
+            "Line-level rendering"
             [ testCase "plain expression stays unwrapped" $ do
                 let result = toGhciScript [HaskellLine "print 42"]
                 assertWrapped result ["print 42"]
@@ -21,12 +21,11 @@ renderTests =
                 let result = toGhciScript [Import "import Data.Text"]
                 assertNotWrapped result
             , testCase "pragma stays unwrapped" $ do
-                let result = toGhciScript [Import "{-# LANGUAGE GADTs #-}"]
+                let result = toGhciScript [Pragma "{-# LANGUAGE GADTs #-}"]
                 assertNotWrapped result
             , testCase "ghci command stays unwrapped" $ do
                 let result = toGhciScript [GhciCommand ":set -XOverloadedStrings"]
-                let ls = nonEmpty result
-                ls @?= [":set -XOverloadedStrings"]
+                nonEmpty result @?= [":set -XOverloadedStrings"]
             , testCase "IO bind gets wrapped" $ do
                 let result = toGhciScript [HaskellLine "x <- getLine"]
                 assertWrapped result ["x <- getLine"]
@@ -35,42 +34,37 @@ renderTests =
                 assertBool "has blank" (T.isInfixOf "\n\n" result || result == "\n")
             ]
         , testGroup
-            "IO line isolation"
+            "Isolation: one block per statement"
             [ testCase "consecutive IO binds each get own block" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "x <- getLine"
                             , HaskellLine "y <- getLine"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 2 blocks, got " ++ show (length blocks))
-                    (length blocks == 2)
+                length (splitBlocks result) @?= 2
             , testCase "consecutive IO expression-statements each get own block" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "print 1"
                             , HaskellLine "putStrLn \"hi\""
+                            , HaskellLine "displayLatex \"hi\""
+                            , HaskellLine "displayLatex \"hi\""
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 2 blocks, got " ++ show (length blocks) ++ ": " ++ show blocks)
-                    (length blocks == 2)
-            , testCase "five consecutive putStrLn statements each get own block" $ do
+                length (splitBlocks result) @?= 4
+            , testCase "inline type annotation does not flip statement into declaration" $ do
                 let result =
                         toGhciScript
-                            [ HaskellLine
-                                "putStrLn $ \"Found \" ++ show (length testPrimes) ++ \" primes up to 10000\""
-                            , HaskellLine "putStrLn $ \"Maximum gap: \" ++ show (maximum testGaps)"
-                            , HaskellLine
-                                "putStrLn $ \"Average gap: \" ++ show (fromIntegral (sum testGaps) / fromIntegral (length testGaps) :: Double)"
-                            , HaskellLine "putStrLn $ \"\\nFirst 10 gaps: \" ++ show (take 10 testGaps)"
-                            , HaskellLine "putStrLn $ \"First 20 primes: \" ++ show (take 20 testPrimes)"
+                            [ HaskellLine "print (1 :: Int)"
+                            , HaskellLine "print \"x\""
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 5 blocks, got " ++ show (length blocks) ++ ": " ++ show blocks)
-                    (length blocks == 5)
+                length (splitBlocks result) @?= 2
+            , testCase "TH splice gets its own block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "$(deriveJSON defaultOptions ''Foo)"
+                            , HaskellLine "print \"after\""
+                            ]
+                length (splitBlocks result) @?= 2
             , testCase "IO bind between pure code splits correctly" $ do
                 let result =
                         toGhciScript
@@ -92,8 +86,7 @@ renderTests =
                             , HaskellLine "  x = 5"
                             , HaskellLine "  y = 10"
                             ]
-                let blocks = splitBlocks result
-                length blocks @?= 1
+                length (splitBlocks result) @?= 1
             , testCase "consecutive do-notation lines grouped" $ do
                 let result =
                         toGhciScript
@@ -102,21 +95,18 @@ renderTests =
                             , HaskellLine "  y <- pure 10"
                             , HaskellLine "  pure $ x + y"
                             ]
-                let blocks = splitBlocks result
-                length blocks @?= 1
+                length (splitBlocks result) @?= 1
             , testCase "consecutive do-notation lines with space are grouped" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "do"
                             , HaskellLine "  x <- pure 5"
-                            , -- indentation should ignore these blank lines.
-                              Blank
+                            , Blank
                             , Blank
                             , HaskellLine "  y <- pure 10"
                             , HaskellLine "  pure $ x + y"
                             ]
-                let blocks = splitBlocks result
-                length blocks @?= 1
+                length (splitBlocks result) @?= 1
             , testCase "blank separates blocks" $ do
                 let result =
                         toGhciScript
@@ -146,7 +136,7 @@ renderTests =
                 assertBool "has print" (T.isInfixOf "print iris" result)
             ]
         , testGroup
-            "Continuation across blanks (don't break)"
+            "Continuation across blanks"
             [ testCase "blank between independent IO statements still separates" $ do
                 let result =
                         toGhciScript
@@ -154,10 +144,7 @@ renderTests =
                             , Blank
                             , HaskellLine "putStrLn \"b\""
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 2 blocks, got " ++ show (length blocks))
-                    (length blocks == 2)
+                length (splitBlocks result) @?= 2
             , testCase "blank between imports still separates" $ do
                 let result =
                         toGhciScript
@@ -165,13 +152,9 @@ renderTests =
                             , Blank
                             , Import "import Data.Map"
                             ]
-                -- Both imports should appear
                 assertBool "has Text" (T.isInfixOf "Data.Text" result)
                 assertBool "has Map" (T.isInfixOf "Data.Map" result)
-            ]
-        , testGroup
-            "Continuation across blanks (new behavior)"
-            [ testCase "blank before where stays in same block" $ do
+            , testCase "blank before where stays in same block" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "foo x = bar x"
@@ -179,14 +162,7 @@ renderTests =
                             , HaskellLine "  where"
                             , HaskellLine "    bar = id"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ( "expected 1 block for where clause, got "
-                        ++ show (length blocks)
-                        ++ ": "
-                        ++ show blocks
-                    )
-                    (length blocks == 1)
+                length (splitBlocks result) @?= 1
             , testCase "blank before guards stays in same block" $ do
                 let result =
                         toGhciScript
@@ -195,14 +171,7 @@ renderTests =
                             , HaskellLine "  | n > 0 = 1"
                             , HaskellLine "  | otherwise = 0"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ( "expected 1 block for guards, got "
-                        ++ show (length blocks)
-                        ++ ": "
-                        ++ show blocks
-                    )
-                    (length blocks == 1)
+                length (splitBlocks result) @?= 1
             , testCase "blank before deriving stays in same block" $ do
                 let result =
                         toGhciScript
@@ -210,14 +179,7 @@ renderTests =
                             , Blank
                             , HaskellLine "  deriving (Show, Eq)"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ( "expected 1 block for deriving, got "
-                        ++ show (length blocks)
-                        ++ ": "
-                        ++ show blocks
-                    )
-                    (length blocks == 1)
+                length (splitBlocks result) @?= 1
             , testCase "double blank still breaks (intentional separation)" $ do
                 let result =
                         toGhciScript
@@ -226,35 +188,25 @@ renderTests =
                             , Blank
                             , HaskellLine "y = 2"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 2 blocks for double blank, got " ++ show (length blocks))
-                    (length blocks == 2)
+                length (splitBlocks result) @?= 2
             ]
         , testGroup
-            "Mixed block splitting (don't break)"
+            "Mixed block splitting"
             [ testCase "pure definitions stay grouped" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "f x = x + 1"
                             , HaskellLine "g y = y * 2"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 1 block for definitions, got " ++ show (length blocks))
-                    (length blocks == 1)
+                length (splitBlocks result) @?= 1
             , testCase "indented continuation stays grouped" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "f x ="
                             , HaskellLine "  x + 1"
                             ]
-                let blocks = splitBlocks result
-                length blocks @?= 1
-            ]
-        , testGroup
-            "Mixed block splitting (new behavior)"
-            [ testCase "definition then IO splits into two blocks" $ do
+                length (splitBlocks result) @?= 1
+            , testCase "definition then IO splits into two blocks" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "x = 5"
@@ -299,11 +251,21 @@ renderTests =
                             [ HaskellLine "f :: Int -> Int"
                             , HaskellLine "f x = x + 1"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ("expected 1 block for sig+def, got " ++ show (length blocks))
-                    (length blocks == 1)
-            , testCase "multiple commented + typed functions + do block each stay intact" $ do
+                length (splitBlocks result) @?= 1
+            , testCase "comment + type sig + guarded body + where stays together" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "-- Helper function to check if a number is prime"
+                            , HaskellLine "isPrime :: Int -> Bool"
+                            , HaskellLine "isPrime n"
+                            , HaskellLine "  | n < 2 = False"
+                            , HaskellLine "  | n == 2 = True"
+                            , HaskellLine "  | even n = False"
+                            , HaskellLine "  | otherwise = all (\\k -> n `mod` k /= 0) [3, 5 .. isqrt n]"
+                            , HaskellLine "  where isqrt = floor . sqrt . fromIntegral"
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "multi-section script: commented + typed functions + do block" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "-- Helper function to check if a number is prime"
@@ -335,45 +297,31 @@ renderTests =
                         ++ show blocks
                     )
                     (length blocks == 4)
-            , testCase "comment + type sig + guarded body + where stays together" $ do
-                let result =
-                        toGhciScript
-                            [ HaskellLine "-- Helper function to check if a number is prime"
-                            , HaskellLine "isPrime :: Int -> Bool"
-                            , HaskellLine "isPrime n"
-                            , HaskellLine "  | n < 2 = False"
-                            , HaskellLine "  | n == 2 = True"
-                            , HaskellLine "  | even n = False"
-                            , HaskellLine "  | otherwise = all (\\k -> n `mod` k /= 0) [3, 5 .. isqrt n]"
-                            , HaskellLine "  where isqrt = floor . sqrt . fromIntegral"
-                            ]
-                let blocks = splitBlocks result
-                assertBool
-                    ( "expected 1 block for sig+guarded def, got "
-                        ++ show (length blocks)
-                        ++ ": "
-                        ++ show blocks
-                    )
-                    (length blocks == 1)
             ]
         , testGroup
-            "Bracket counting (don't break)"
+            "Comments"
+            [ testCase "comment attaches to following declaration" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "-- doc comment"
+                            , HaskellLine "f x = x + 1"
+                            ]
+                length (splitBlocks result) @?= 1
+                assertWrapped result ["-- doc comment", "f x = x + 1"]
+            ]
+        , testGroup
+            "Bracket counting"
             [ testCase "complete expression in parens" $ do
                 let result = toGhciScript [HaskellLine "f x = (x + 1)"]
-                let blocks = splitBlocks result
-                length blocks @?= 1
+                length (splitBlocks result) @?= 1
             , testCase "balanced multiline already grouped by indentation" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "f x ="
                             , HaskellLine "  (x + 1)"
                             ]
-                let blocks = splitBlocks result
-                length blocks @?= 1
-            ]
-        , testGroup
-            "Bracket counting (new behavior)"
-            [ testCase "unclosed bracket extends block" $ do
+                length (splitBlocks result) @?= 1
+            , testCase "unclosed bracket extends block" $ do
                 let result =
                         toGhciScript
                             [ HaskellLine "xs = ["
@@ -382,14 +330,7 @@ renderTests =
                             , HaskellLine "  3"
                             , HaskellLine "  ]"
                             ]
-                let blocks = splitBlocks result
-                assertBool
-                    ( "expected 1 block for list literal, got "
-                        ++ show (length blocks)
-                        ++ ": "
-                        ++ show blocks
-                    )
-                    (length blocks == 1)
+                length (splitBlocks result) @?= 1
             ]
         ]
 
