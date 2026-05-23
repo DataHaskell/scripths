@@ -5,8 +5,18 @@ import Test.Tasty.HUnit (Assertion, assertBool, testCase, (@?=))
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import ScriptHs.Parser (Line (..))
-import ScriptHs.Render (toGhciScript)
+import ScriptHs.Parser (CabalMeta (..), Line (..))
+import ScriptHs.Render (
+    LhsBlock (..),
+    ModuleParts (..),
+    TrailKind (..),
+    actionExprs,
+    renderCabalScriptHeader,
+    renderLiterate,
+    renderModuleText,
+    toGhciScript,
+    toModule,
+ )
 
 renderTests :: TestTree
 renderTests =
@@ -332,6 +342,90 @@ renderTests =
                             ]
                 length (splitBlocks result) @?= 1
             ]
+        , moduleTests
+        ]
+
+moduleTests :: TestTree
+moduleTests =
+    testGroup
+        "Module rendering (notebook export)"
+        [ testCase "pragmas and imports hoist into their buckets" $ do
+            let mp =
+                    toModule
+                        (const TrailUnknown)
+                        [ Pragma "{-# LANGUAGE GADTs #-}"
+                        , Import "import Data.Text (Text)"
+                        , HaskellLine "x = 5"
+                        ]
+            mpPragmas mp @?= ["{-# LANGUAGE GADTs #-}"]
+            mpImports mp @?= ["import Data.Text (Text)"]
+            mpDecls mp @?= ["x = 5"]
+            mpMain mp @?= []
+        , testCase ":set -XExt becomes LANGUAGE pragma(s)" $ do
+            let mp =
+                    toModule (const TrailUnknown) [GhciCommand ":set -XOverloadedStrings -XGADTs"]
+            mpPragmas mp
+                @?= ["{-# LANGUAGE OverloadedStrings #-}", "{-# LANGUAGE GADTs #-}"]
+        , testCase "non -X ghci directives and :{ :} are dropped" $ do
+            let mp =
+                    toModule
+                        (const TrailUnknown)
+                        [GhciCommand ":type foo", GhciCommand ":{", GhciCommand ":}"]
+            mp @?= mempty
+        , testCase "value binding routes to decls, not main" $ do
+            let mp = toModule (const TrailUnknown) [HaskellLine "f x = x + 1"]
+            mpDecls mp @?= ["f x = x + 1"]
+            mpMain mp @?= []
+        , testCase "IO bind routes to main verbatim" $ do
+            let mp = toModule (const TrailUnknown) [HaskellLine "x <- getLine"]
+            mpMain mp @?= ["x <- getLine"]
+            mpDecls mp @?= []
+        , testCase "trailing pure expression is printed" $ do
+            let mp = toModule (const TrailPure) [HaskellLine "df"]
+            mpMain mp @?= ["print (df)"]
+        , testCase "trailing IO () expression is verbatim" $ do
+            let mp = toModule (const TrailIOUnit) [HaskellLine "putStrLn \"hi\""]
+            mpMain mp @?= ["putStrLn \"hi\""]
+        , testCase "trailing IO-show expression binds with print" $ do
+            let mp = toModule (const TrailIOShow) [HaskellLine "readLn"]
+            mpMain mp @?= ["print =<< (readLn)"]
+        , testCase "unresolved trailing expression is commented out" $ do
+            let mp = toModule (const TrailUnknown) [HaskellLine "mystery"]
+            assertBool "comments out the expr" (any (T.isInfixOf "-- mystery") (mpMain mp))
+        , testCase "TH splice is un-rewritten to a top-level decl" $ do
+            let mp = toModule (const TrailUnknown) [HaskellLine "_ = (); deriveFoo ''Bar"]
+            mpDecls mp @?= ["$(deriveFoo ''Bar)"]
+        , testCase "actionExprs lists trailing expressions in order" $
+            actionExprs [HaskellLine "putStrLn \"a\"", HaskellLine "result"]
+                @?= ["putStrLn \"a\"", "result"]
+        , testCase "empty main renders as pure ()" $ do
+            let txt = renderModuleText (Just "Main") (mempty{mpDecls = ["x = 1"]})
+            assertBool "has module header" (T.isInfixOf "module Main where" txt)
+            assertBool "has main = pure ()" (T.isInfixOf "main = pure ()" txt)
+        , testCase "main do-block indents statements" $ do
+            let txt = renderModuleText (Just "Main") (mempty{mpMain = ["print 1", "print 2"]})
+            assertBool "has main = do" (T.isInfixOf "main = do" txt)
+            assertBool "indents print 1" (T.isInfixOf "    print 1" txt)
+        , testCase "cabal-script header includes base + Wno-unused-imports" $ do
+            let hdr = renderCabalScriptHeader (CabalMeta ["dataframe", "text"] [] [])
+            assertBool "opens block" (T.isInfixOf "{- cabal:" hdr)
+            assertBool
+                "base + deps"
+                (T.isInfixOf "build-depends: base, dataframe, text" hdr)
+            assertBool "suppresses unused imports" (T.isInfixOf "-Wno-unused-imports" hdr)
+        , testCase "literate output separates code from prose with a blank line" $
+            renderLiterate [LhsProse "Intro paragraph.", LhsCode ["main = pure ()"]]
+                @?= "Intro paragraph.\n\n> main = pure ()"
+        , testCase
+            "literate prose indents lines starting with # or > (else GHC mis-reads them)"
+            $ do
+                let txt =
+                        renderLiterate
+                            [LhsProse "# Heading\n> quote\nplain", LhsCode ["main = pure ()"]]
+                assertBool "escapes leading #" (T.isPrefixOf " # Heading" txt)
+                assertBool "escapes leading >" (T.isInfixOf "\n > quote" txt)
+                assertBool "leaves plain prose" (T.isInfixOf "\nplain" txt)
+                assertBool "code still bird-prefixed" (T.isInfixOf "> main = pure ()" txt)
         ]
 
 splitBlocks :: Text -> [[Text]]

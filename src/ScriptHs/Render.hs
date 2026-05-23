@@ -11,12 +11,32 @@ each unit, then assembles blocks accordingly.
 -}
 module ScriptHs.Render (
     toGhciScript,
+
+    -- * Module rendering (notebook → standalone Haskell)
+    ModuleParts (..),
+    TrailKind (..),
+    TrailingResolver,
+    toModule,
+    actionExprs,
+    renderModuleText,
+    renderCabalScriptHeader,
+    renderCabalScript,
+    LhsBlock (..),
+    renderLiterate,
+
+    -- * Reusable line classification (for downstream tooling)
+    Kind (..),
+    Piece (..),
+    toPieces,
+    classify,
+    lineText,
 ) where
 
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.List (intercalate)
 import Data.Text (Text)
 import qualified Data.Text as T
-import ScriptHs.Parser (Line (..))
+import ScriptHs.Parser (CabalMeta (..), Line (..))
 
 data Block
     = SingleLine Line
@@ -242,21 +262,28 @@ isCommentText t = "--" `T.isPrefixOf` T.stripStart t
 -- Step 2: [Piece] -> [Block]
 ---------------------------------------------------------------
 
+{- | Normalize a piece stream: attach each comment unit forward onto the
+following non-comment unit, and merge runs of adjacent declarations into a
+single unit. Shared by 'toGhciScript' (block wrapping) and 'toModule'
+(bucketing) so both see identical grouping.
+-}
+mergePieces :: [Piece] -> [Piece]
+mergePieces (PUnit KComment l1 : PUnit k l2 : rest)
+    | k /= KComment = mergePieces (PUnit k (l1 ++ l2) : rest)
+mergePieces (PUnit KDeclaration l1 : PUnit KDeclaration l2 : rest) =
+    mergePieces (PUnit KDeclaration (l1 ++ l2) : rest)
+mergePieces (p : rest) = p : mergePieces rest
+mergePieces [] = []
+
 piecesToBlocks :: [Piece] -> [Block]
-piecesToBlocks [] = []
-piecesToBlocks (PBlank : rest) = SingleLine Blank : piecesToBlocks rest
-piecesToBlocks (PGhciCommand t : rest) = SingleLine (GhciCommand t) : piecesToBlocks rest
-piecesToBlocks (PPragma t : rest) = SingleLine (Pragma t) : piecesToBlocks rest
-piecesToBlocks (PImport t : rest) = SingleLine (Import t) : piecesToBlocks rest
-piecesToBlocks (PUnit KComment lines1 : PUnit k lines2 : rest)
-    | k /= KComment =
-        piecesToBlocks (PUnit k (lines1 ++ lines2) : rest)
-piecesToBlocks (PUnit KDeclaration lines1 : PUnit KDeclaration lines2 : rest) =
-    piecesToBlocks (PUnit KDeclaration (lines1 ++ lines2) : rest)
-piecesToBlocks (PUnit _ ls : rest) = toBlock ls : piecesToBlocks rest
+piecesToBlocks = map pieceToBlock . mergePieces
   where
-    toBlock [l] = SingleLine l
-    toBlock xs = MultiLine xs
+    pieceToBlock PBlank = SingleLine Blank
+    pieceToBlock (PGhciCommand t) = SingleLine (GhciCommand t)
+    pieceToBlock (PPragma t) = SingleLine (Pragma t)
+    pieceToBlock (PImport t) = SingleLine (Import t)
+    pieceToBlock (PUnit _ [l]) = SingleLine l
+    pieceToBlock (PUnit _ ls) = MultiLine ls
 
 ---------------------------------------------------------------
 -- Rendering
@@ -279,3 +306,224 @@ lineText (GhciCommand t) = t
 lineText (Pragma t) = t
 lineText (Import t) = t
 lineText (HaskellLine t) = t
+
+---------------------------------------------------------------
+-- Module rendering: notebook cells -> standalone Haskell
+---------------------------------------------------------------
+
+{- | The four buckets a sequence of notebook 'Line's sorts into when
+assembling a compilable module: language pragmas and imports (hoisted to the
+top), top-level declarations (order-independent), and statements destined for
+a generated @main@ do-block (which must preserve document order).
+-}
+data ModuleParts = ModuleParts
+    { mpPragmas :: [Text]
+    , mpImports :: [Text]
+    , mpDecls :: [Text]
+    , mpMain :: [Text]
+    }
+    deriving (Show, Eq)
+
+instance Semigroup ModuleParts where
+    a <> b =
+        ModuleParts
+            { mpPragmas = mpPragmas a <> mpPragmas b
+            , mpImports = mpImports a <> mpImports b
+            , mpDecls = mpDecls a <> mpDecls b
+            , mpMain = mpMain a <> mpMain b
+            }
+
+instance Monoid ModuleParts where
+    mempty = ModuleParts [] [] [] []
+
+{- | How a trailing bare expression (a 'KAction' unit) should be emitted in
+the generated @main@. A GHCi cell that ends in a bare expression auto-prints
+it; a compiled @main@ cannot, so the caller resolves each expression's intent
+(typically by querying a live session) and 'toModule' emits accordingly.
+-}
+data TrailKind
+    = -- | @IO ()@: emit the expression verbatim as a statement.
+      TrailIOUnit
+    | -- | @IO a@, @a@ showable and @/= ()@: emit @print =<< (e)@.
+      TrailIOShow
+    | -- | pure and showable: emit @print (e)@ (the GHCi auto-print case).
+      TrailPure
+    | -- | undeterminable or not printable: emit commented out.
+      TrailUnknown
+    deriving (Show, Eq)
+
+-- | Decide how a trailing expression (rendered to 'Text') should be emitted.
+type TrailingResolver = Text -> TrailKind
+
+{- | Every trailing-action expression in a line sequence, in order, exactly as
+'toModule' presents them to a 'TrailingResolver'. Lets a caller pre-resolve
+each expression (e.g. via @:type@ against a live session) and build a pure
+resolver before calling 'toModule'.
+-}
+actionExprs :: [Line] -> [Text]
+actionExprs = concatMap fromPiece . mergePieces . toPieces
+  where
+    fromPiece (PUnit KAction ls) = [actionBody ls]
+    fromPiece _ = []
+
+{- | Sort a sequence of notebook 'Line's into 'ModuleParts'. Imports and
+language pragmas are hoisted; @:set -XExt@ becomes a @LANGUAGE@ pragma; other
+GHCi directives and @:{@\/@:}@ delimiters are dropped; declarations and TH
+splices become top-level decls; monadic binds and trailing expressions become
+@main@ statements (the latter shaped by the 'TrailingResolver').
+-}
+toModule :: TrailingResolver -> [Line] -> ModuleParts
+toModule resolve = foldMap fromPiece . mergePieces . toPieces
+  where
+    fromPiece PBlank = mempty
+    fromPiece (PGhciCommand t) = ghciToParts t
+    fromPiece (PPragma t) = mempty{mpPragmas = [t]}
+    fromPiece (PImport t) = mempty{mpImports = [t]}
+    fromPiece (PUnit KComment ls) = mempty{mpDecls = [renderLines ls]}
+    fromPiece (PUnit KDeclaration ls) = mempty{mpDecls = [renderLines ls]}
+    fromPiece (PUnit KTHSplice ls) = mempty{mpDecls = [unRewriteSplice (renderLines ls)]}
+    fromPiece (PUnit KIOBind ls) = mempty{mpMain = [renderLines ls]}
+    fromPiece (PUnit KAction ls) =
+        let (comments, body) = spanCommentLines ls
+            expr = renderLines body
+            stmt = case resolve expr of
+                TrailIOUnit -> expr
+                TrailIOShow -> wrapApplied "print =<<" expr
+                TrailPure -> wrapApplied "print" expr
+                TrailUnknown -> commentOut expr
+         in mempty{mpMain = map lineText comments ++ [stmt]}
+
+{- | A GHCi directive's contribution to a module: @:set -XExt@ becomes a
+pragma; @:{@\/@:}@ and everything else is dropped.
+-}
+ghciToParts :: Text -> ModuleParts
+ghciToParts t
+    | s == ":{" || s == ":}" = mempty
+    | otherwise = mempty{mpPragmas = map languagePragma (setExtensions s)}
+  where
+    s = T.strip t
+
+-- | Extensions named by a @:set -XExt@ \/ @:seti -XExt@ directive.
+setExtensions :: Text -> [Text]
+setExtensions t = case T.words t of
+    (cmd : rest)
+        | cmd `elem` [":set", ":seti"] ->
+            [ext | w <- rest, Just ext <- [T.stripPrefix "-X" w]]
+    _ -> []
+
+languagePragma :: Text -> Text
+languagePragma ext = "{-# LANGUAGE " <> ext <> " #-}"
+
+-- | Reverse the parser's GHCi TH hack (@$(x)@ -> @_ = (); x@) for a module.
+unRewriteSplice :: Text -> Text
+unRewriteSplice t
+    | "\n" `T.isInfixOf` t = t
+    | Just inner <- T.stripPrefix "_ = (); " (T.stripStart t) = "$(" <> inner <> ")"
+    | otherwise = t
+
+-- | @prefix (expr)@, wrapping multi-line expressions onto their own lines.
+wrapApplied :: Text -> Text -> Text
+wrapApplied prefix expr
+    | "\n" `T.isInfixOf` expr =
+        prefix <> " (\n" <> indentText "    " expr <> "\n    )"
+    | otherwise = prefix <> " (" <> expr <> ")"
+
+commentOut :: Text -> Text
+commentOut expr =
+    T.intercalate "\n" $
+        "-- [sabela:export] could not resolve this trailing expression's type;"
+            : "-- left commented out — wire it into main as needed:"
+            : map ("-- " <>) (T.lines expr)
+
+actionBody :: [Line] -> Text
+actionBody = renderLines . snd . spanCommentLines
+
+spanCommentLines :: [Line] -> ([Line], [Line])
+spanCommentLines = span isCommentLine
+
+isCommentLine :: Line -> Bool
+isCommentLine (HaskellLine t) = isCommentText t
+isCommentLine _ = False
+
+renderLines :: [Line] -> Text
+renderLines = T.intercalate "\n" . map lineText
+
+indentText :: Text -> Text -> Text
+indentText pad = T.intercalate "\n" . map (pad <>) . T.lines
+
+-- | Deduplicate while preserving first-occurrence order (no @containers@ dep).
+dedup :: [Text] -> [Text]
+dedup = go []
+  where
+    go _ [] = []
+    go seen (x : xs)
+        | x `elem` seen = go seen xs
+        | otherwise = x : go (x : seen) xs
+
+{- | Assemble 'ModuleParts' into module source: deduped pragmas, an optional
+@module … where@ header, deduped imports, declarations (blank-separated), and
+a generated @main@ (@pure ()@ when there are no statements).
+-}
+renderModuleText :: Maybe Text -> ModuleParts -> Text
+renderModuleText mModName mp =
+    T.unlines . intercalate [""] . filter (not . null) $
+        [ dedup (mpPragmas mp)
+        , maybe [] (\n -> ["module " <> n <> " where"]) mModName
+        , dedup (mpImports mp)
+        , joinBlocks (mpDecls mp)
+        , mainLines
+        ]
+  where
+    mainLines =
+        ("main :: IO ()" :) $
+            case mpMain mp of
+                [] -> ["main = pure ()"]
+                stmts -> "main = do" : concatMap (map ("    " <>) . T.lines) stmts
+
+-- | Flatten multi-line chunks into lines, separated by a single blank line.
+joinBlocks :: [Text] -> [Text]
+joinBlocks = intercalate [""] . map T.lines
+
+{- | A single-file cabal-script header (@{\- cabal: … -\}@) rendered from
+'CabalMeta'. @base@ is always present and @-Wno-unused-imports@ is added since
+the exporter over-includes imports to keep dependency slices self-contained.
+-}
+renderCabalScriptHeader :: CabalMeta -> Text
+renderCabalScriptHeader (CabalMeta deps exts opts) =
+    T.unlines $
+        ["{- cabal:", "build-depends: " <> commaList (dedup ("base" : deps))]
+            ++ ["default-extensions: " <> commaList exts' | not (null exts')]
+            ++ ["ghc-options: " <> T.unwords opts']
+            ++ ["-}"]
+  where
+    exts' = dedup exts
+    opts' = dedup (opts ++ ["-Wno-unused-imports"])
+    commaList = T.intercalate ", "
+
+-- | A runnable single-file cabal script: a @{\- cabal: -\}@ header over a module.
+renderCabalScript :: CabalMeta -> ModuleParts -> Text
+renderCabalScript meta mp =
+    renderCabalScriptHeader meta <> "\n" <> renderModuleText (Just "Main") mp
+
+-- | One block of a literate-Haskell document: prose, or Bird-style code.
+data LhsBlock
+    = LhsProse Text
+    | LhsCode [Text]
+    deriving (Show, Eq)
+
+{- | Render literate Haskell, Bird-style (@>@-prefixed code). Blocks are
+separated by a blank line, satisfying the rule that a code block must be
+preceded and followed by a blank line.
+-}
+renderLiterate :: [LhsBlock] -> Text
+renderLiterate = T.intercalate "\n\n" . map render
+  where
+    render (LhsProse t) = T.intercalate "\n" (map escapeProse (T.lines t))
+    render (LhsCode ls) = T.intercalate "\n" (map bird ls)
+    bird l = if T.null l then ">" else "> " <> l
+    -- A prose line starting with @>@ would be read as code, and one starting
+    -- with @#@ as a CPP line directive; indent both by a space to keep them
+    -- prose. (GHC's literate preprocessor is sensitive to column 0.)
+    escapeProse l
+        | T.isPrefixOf ">" l || T.isPrefixOf "#" l = " " <> l
+        | otherwise = l
