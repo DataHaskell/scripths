@@ -10,9 +10,10 @@ import Test.Tasty.HUnit (
 
 import qualified Data.Text as T
 import ScriptHs.Parser (
-    CabalMeta (metaDeps, metaExts, metaGhcOptions),
+    CabalMeta (metaDeps, metaExts, metaGhcOptions, metaSourceRepos, metaUnknownKeys),
     Line (..),
     ScriptFile (scriptLines, scriptMeta),
+    SourceRepoPin (..),
     parseScript,
  )
 
@@ -99,10 +100,17 @@ parseTests =
                 let sf = parseScript input
                 (metaDeps . scriptMeta) sf @?= ["base", "text", "containers"]
                 (metaExts . scriptMeta) sf @?= ["GADTs"]
-            , testCase "unknown cabal key is ignored" $ do
+            , testCase "unknown cabal key is recorded (and warned), not a dep" $ do
                 let sf = parseScript "-- cabal: foo: bar, baz\n"
                 (metaDeps . scriptMeta) sf @?= []
                 (metaExts . scriptMeta) sf @?= []
+                (metaUnknownKeys . scriptMeta) sf @?= ["foo"]
+            , testCase "source-repository-package directive parses a git pin" $ do
+                let sf =
+                        parseScript
+                            "-- cabal: source-repository-package: https://x/repo abc123 sub\n"
+                (metaSourceRepos . scriptMeta) sf
+                    @?= [SourceRepoPin "https://x/repo" "abc123" (Just "sub")]
             ]
         , testGroup
             "Multi-line scripts"

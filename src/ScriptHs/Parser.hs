@@ -18,11 +18,13 @@ M.fromList (zip [1..10] [2,4..])
 module ScriptHs.Parser (
     ScriptFile (..),
     CabalMeta (..),
+    SourceRepoPin (..),
     Line (..),
     parseScript,
     mergeMetas,
 ) where
 
+import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -55,6 +57,29 @@ data CabalMeta = CabalMeta
     -- ^ Extensions from @default-extensions@ directives.
     , metaGhcOptions :: [Text]
     -- ^ Flags from @ghc-options@ directives.
+    , metaSourceRepos :: [SourceRepoPin]
+    -- ^ Pinned git packages from @source-repository-package@ directives.
+    , metaUnknownKeys :: [Text]
+    -- ^ Unrecognised @-- cabal:@ directive keys (surfaced as warnings).
+    }
+    deriving (Show, Eq)
+
+{- | A git @source-repository-package@ pin, declared with
+
+@
+-- cabal: source-repository-package: <location> <ref> [subdir]
+@
+
+so documentation can build against a pinned, pushed commit/tag (reproducible
+and commit-safe, unlike a local working-tree path).
+-}
+data SourceRepoPin = SourceRepoPin
+    { srpLocation :: Text
+    -- ^ Repository location (e.g. a git URL).
+    , srpRef :: Text
+    -- ^ Commit hash or tag (becomes cabal's @tag:@).
+    , srpSubdir :: Maybe Text
+    -- ^ Optional subdirectory within the repository.
     }
     deriving (Show, Eq)
 
@@ -80,10 +105,10 @@ failure.
 Example:
 
 >>> parseScript "-- cabal: build-depends: text\nimport Data.Text (Text)\n"
-Right (ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcOptions = []}, scriptLines = [Import "import Data.Text (Text)"]})
+ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcOptions = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = [Import "import Data.Text (Text)"]}
 
 >>> parseScript ""
-Right (ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = []}, scriptLines = []})
+ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = []}
 -}
 parseScript :: Text -> ScriptFile
 parseScript input =
@@ -109,6 +134,8 @@ mergeMetas ms =
         { metaDeps = concatMap metaDeps ms
         , metaExts = concatMap metaExts ms
         , metaGhcOptions = concatMap metaGhcOptions ms
+        , metaSourceRepos = concatMap metaSourceRepos ms
+        , metaUnknownKeys = concatMap metaUnknownKeys ms
         }
 
 parseLine :: Text -> RawLine
@@ -128,10 +155,35 @@ parseCabalMeta line = do
                 "build-depends" -> emptyCabal{metaDeps = items}
                 "default-extensions" -> emptyCabal{metaExts = items}
                 "ghc-options" -> emptyCabal{metaGhcOptions = items}
-                _ -> emptyCabal
+                "source-repository-package" ->
+                    emptyCabal{metaSourceRepos = maybeToList (parseSourceRepo value)}
+                other -> emptyCabal{metaUnknownKeys = [other]}
         _ -> Nothing
   where
-    emptyCabal = CabalMeta{metaDeps = [], metaExts = [], metaGhcOptions = []}
+    emptyCabal =
+        CabalMeta
+            { metaDeps = []
+            , metaExts = []
+            , metaGhcOptions = []
+            , metaSourceRepos = []
+            , metaUnknownKeys = []
+            }
+
+{- | Parse a @source-repository-package@ value: whitespace-separated
+@\<location\> \<ref\> [subdir]@ (not comma-separated like the other directives).
+-}
+parseSourceRepo :: Text -> Maybe SourceRepoPin
+parseSourceRepo value = case T.words value of
+    (loc : ref : rest) ->
+        Just
+            SourceRepoPin
+                { srpLocation = loc
+                , srpRef = ref
+                , srpSubdir = case rest of
+                    (sub : _) -> Just sub
+                    [] -> Nothing
+                }
+    _ -> Nothing
 
 parseCodeLine :: Text -> Line
 parseCodeLine line

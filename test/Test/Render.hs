@@ -407,7 +407,7 @@ moduleTests =
             assertBool "has main = do" (T.isInfixOf "main = do" txt)
             assertBool "indents print 1" (T.isInfixOf "    print 1" txt)
         , testCase "cabal-script header includes base + Wno-unused-imports" $ do
-            let hdr = renderCabalScriptHeader (CabalMeta ["dataframe", "text"] [] [])
+            let hdr = renderCabalScriptHeader (CabalMeta ["dataframe", "text"] [] [] [] [])
             assertBool "opens block" (T.isInfixOf "{- cabal:" hdr)
             assertBool
                 "base + deps"

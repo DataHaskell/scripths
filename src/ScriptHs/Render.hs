@@ -34,9 +34,10 @@ module ScriptHs.Render (
 
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (intercalate)
+import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
-import ScriptHs.Parser (CabalMeta (..), Line (..))
+import ScriptHs.Parser (CabalMeta (..), Line (..), SourceRepoPin (..))
 
 data Block
     = SingleLine Line
@@ -489,16 +490,23 @@ joinBlocks = intercalate [""] . map T.lines
 the exporter over-includes imports to keep dependency slices self-contained.
 -}
 renderCabalScriptHeader :: CabalMeta -> Text
-renderCabalScriptHeader (CabalMeta deps exts opts) =
+renderCabalScriptHeader meta =
     T.unlines $
-        ["{- cabal:", "build-depends: " <> commaList (dedup ("base" : deps))]
+        ["{- cabal:", "build-depends: " <> commaList (dedup ("base" : metaDeps meta))]
             ++ ["default-extensions: " <> commaList exts' | not (null exts')]
             ++ ["ghc-options: " <> T.unwords opts']
+            ++ map renderRepo (metaSourceRepos meta)
             ++ ["-}"]
   where
-    exts' = dedup exts
-    opts' = dedup (opts ++ ["-Wno-unused-imports"])
+    exts' = dedup (metaExts meta)
+    opts' = dedup (metaGhcOptions meta ++ ["-Wno-unused-imports"])
     commaList = T.intercalate ", "
+    renderRepo r =
+        T.unwords $
+            "source-repository-package:"
+                : srpLocation r
+                : srpRef r
+                : maybeToList (srpSubdir r)
 
 -- | A runnable single-file cabal script: a @{\- cabal: -\}@ header over a module.
 renderCabalScript :: CabalMeta -> ModuleParts -> Text

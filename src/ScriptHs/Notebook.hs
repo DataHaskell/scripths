@@ -19,33 +19,38 @@ import ScriptHs.Parser (
     mergeMetas,
     parseScript,
  )
-import ScriptHs.Run (runScriptCapture)
+import ScriptHs.Run (RunOptions, runScriptCapture)
 
 type IndexedSegments = [(Int, Segment)]
 type IndexedBlocks = [(Int, [Line])]
 
-runNotebook :: FilePath -> Maybe FilePath -> IO ()
-runNotebook path outputPath = do
+runNotebook :: RunOptions -> FilePath -> Maybe FilePath -> IO ()
+runNotebook opts path outputPath = do
     contents <- TIO.readFile path
-    outputMd <- processNotebook path contents
+    outputMd <- processNotebook opts path contents
     case outputPath of
         Nothing -> TIO.putStr outputMd
         Just output -> TIO.writeFile output outputMd
 
-processNotebook :: FilePath -> Text -> IO Text
-processNotebook notebookPath contents = do
+processNotebook :: RunOptions -> FilePath -> Text -> IO Text
+processNotebook opts notebookPath contents = do
     let indexedSegments = zip [0 ..] (parseMarkdown contents)
         (metas, indexedCodeBlocks) = parseBlocks indexedSegments
     if null indexedCodeBlocks
         then pure contents
-        else executeCodeCells notebookPath metas indexedSegments indexedCodeBlocks
+        else executeCodeCells opts notebookPath metas indexedSegments indexedCodeBlocks
 
 executeCodeCells ::
-    FilePath -> CabalMeta -> IndexedSegments -> IndexedBlocks -> IO Text
-executeCodeCells notebookPath meta allSegments codeBlocks = do
+    RunOptions ->
+    FilePath ->
+    CabalMeta ->
+    IndexedSegments ->
+    IndexedBlocks ->
+    IO Text
+executeCodeCells opts notebookPath meta allSegments codeBlocks = do
     let ghciScript = generatedMarkedScript codeBlocks
         sf = ScriptFile{scriptMeta = meta, scriptLines = ghciScript}
-    rawOutput <- runScriptCapture notebookPath sf
+    rawOutput <- runScriptCapture opts notebookPath sf
     let outputs = splitByMarkers rawOutput (map fst codeBlocks)
         blocksWithOutput = addOutputToSegments outputs allSegments
     pure $ reassemble blocksWithOutput
