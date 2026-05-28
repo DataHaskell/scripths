@@ -65,7 +65,7 @@ runWithCont cont opts scriptPath sf = do
     scriptAbsPath <- makeAbsolute scriptPath
     userCwd <- getCurrentDirectory
     warnUnknownKeys (metaUnknownKeys (scriptMeta sf))
-    projectDir <- ensureProject opts scriptAbsPath (scriptMeta sf) (scriptLines sf)
+    projectDir <- ensureProject opts userCwd scriptAbsPath (scriptMeta sf) (scriptLines sf)
     cont userCwd projectDir (projectDir </> "script.ghci")
 
 -- | Warn (once each) about unrecognised @-- cabal:@ directive keys.
@@ -80,8 +80,8 @@ deriveProjectName path =
     let sanitized = map (\c -> if isAlphaNum c then c else '-') path
      in dropWhile (== '-') sanitized
 
-ensureProject :: RunOptions -> FilePath -> CabalMeta -> [Line] -> IO FilePath
-ensureProject opts scriptAbsPath meta scriptCode = do
+ensureProject :: RunOptions -> FilePath -> FilePath -> CabalMeta -> [Line] -> IO FilePath
+ensureProject opts userCwd scriptAbsPath meta scriptCode = do
     home <- getHomeDirectory
     let name = deriveProjectName scriptAbsPath
         projectDir = home </> ".scripths" </> name
@@ -98,8 +98,45 @@ ensureProject opts scriptAbsPath meta scriptCode = do
     mainHsExists <- doesFileExist mainHsPath
     unless mainHsExists $ writeFile mainHsPath "main :: IO ()\nmain = pure ()\n"
     writeFile (projectDir </> (name ++ ".cabal")) (renderCabalFile name meta)
-    TIO.writeFile (projectDir </> "script.ghci") (toGhciScript scriptCode)
+    TIO.writeFile
+        (projectDir </> "script.ghci")
+        (autoPrintDirective <> cdDirective userCwd <> toGhciScript scriptCode)
     pure projectDir
+
+{- | Make GHCi auto-print a trailing 'String' result /raw/ (via 'putStr')
+instead of @show@-escaping it into a quoted one-line literal. This lets a
+notebook cell end in @df |> toMarkdown'@ and have the markdown actually render,
+with no explicit 'putStrLn'. Every non-'String' result still prints via @show@,
+so tuples, @Either@, dataframes, etc. are unaffected.
+-}
+autoPrintDirective :: T.Text
+autoPrintDirective =
+    T.unlines
+        [ ":set -XFlexibleInstances -XUndecidableInstances"
+        , "class ScripthsAutoPrint a where scripthsAutoPrint :: a -> IO ()"
+        , "instance {-# OVERLAPPING #-} ScripthsAutoPrint String where scripthsAutoPrint = putStr"
+        , "instance {-# OVERLAPPABLE #-} Show a => ScripthsAutoPrint a where scripthsAutoPrint = print"
+        , ":set -interactive-print scripthsAutoPrint"
+        ]
+
+{- | A GHCi preamble that changes the /process/ working directory to the dir
+@scripths@ was invoked from, so a script can read @./data/foo.csv@ relative to
+the user's working tree (the throwaway project lives under @~\/.scripths@).
+
+We use @System.Directory.setCurrentDirectory@ rather than GHCi's @:cd@: @:cd@
+unloads every loaded module (which breaks the @cabal repl@ session), whereas a
+plain IO action does not. @show@ renders a correctly escaped Haskell string
+literal, so paths containing spaces or quotes are safe. @directory@ is added to
+the synthetic package's dependencies (see 'renderCabalFile') so the import
+always resolves.
+-}
+cdDirective :: FilePath -> T.Text
+cdDirective dir =
+    T.pack $
+        unlines
+            [ "import qualified System.Directory as ScripthsInternalDir"
+            , "ScripthsInternalDir.setCurrentDirectory " <> show dir
+            ]
 
 {- | First line of a scripths-generated @cabal.project@. We regenerate only
 files that carry it (or the legacy @packages: .@ default), never hand-edited ones.
@@ -184,7 +221,7 @@ readCabalPackageName path = do
 
 renderCabalFile :: String -> CabalMeta -> String
 renderCabalFile name CabalMeta{metaDeps, metaExts, metaGhcOptions} =
-    let deps = "base" : map T.unpack metaDeps
+    let deps = nub ("base" : "directory" : map T.unpack metaDeps)
         depsStr = intercalate ", " deps
         extsStr = intercalate ", " (map T.unpack metaExts)
         optsStr = unwords (map T.unpack metaGhcOptions)
