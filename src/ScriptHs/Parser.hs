@@ -57,6 +57,11 @@ data CabalMeta = CabalMeta
     -- ^ Extensions from @default-extensions@ directives.
     , metaGhcOptions :: [Text]
     -- ^ Flags from @ghc-options@ directives.
+    , metaPackages :: [Text]
+    {- ^ Extra local package dirs from @packages@ directives, resolved relative
+    to the script file (lets a notebook depend on a second, non-enclosing local
+    package, e.g. @-- cabal: packages: ../sibling@).
+    -}
     , metaSourceRepos :: [SourceRepoPin]
     -- ^ Pinned git packages from @source-repository-package@ directives.
     , metaUnknownKeys :: [Text]
@@ -105,10 +110,10 @@ failure.
 Example:
 
 >>> parseScript "-- cabal: build-depends: text\nimport Data.Text (Text)\n"
-ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcOptions = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = [Import "import Data.Text (Text)"]}
+ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcOptions = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = [Import "import Data.Text (Text)"]}
 
 >>> parseScript ""
-ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = []}
+ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = []}
 -}
 parseScript :: Text -> ScriptFile
 parseScript input =
@@ -134,6 +139,7 @@ mergeMetas ms =
         { metaDeps = concatMap metaDeps ms
         , metaExts = concatMap metaExts ms
         , metaGhcOptions = concatMap metaGhcOptions ms
+        , metaPackages = concatMap metaPackages ms
         , metaSourceRepos = concatMap metaSourceRepos ms
         , metaUnknownKeys = concatMap metaUnknownKeys ms
         }
@@ -155,6 +161,7 @@ parseCabalMeta line = do
                 "build-depends" -> emptyCabal{metaDeps = items}
                 "default-extensions" -> emptyCabal{metaExts = items}
                 "ghc-options" -> emptyCabal{metaGhcOptions = items}
+                "packages" -> emptyCabal{metaPackages = items}
                 "source-repository-package" ->
                     emptyCabal{metaSourceRepos = maybeToList (parseSourceRepo value)}
                 other -> emptyCabal{metaUnknownKeys = [other]}
@@ -165,6 +172,7 @@ parseCabalMeta line = do
             { metaDeps = []
             , metaExts = []
             , metaGhcOptions = []
+            , metaPackages = []
             , metaSourceRepos = []
             , metaUnknownKeys = []
             }

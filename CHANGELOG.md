@@ -1,5 +1,28 @@
 # Revision history for scripths
 
+## 0.4.0.0 -- 2026-05-29
+
+* **`OverloadedStrings` on by default** in every scripths repl, so string literals
+  work directly as `Text` / `ByteString`.
+* **Compile-time Template Haskell now sees your working directory**: notebooks
+  using TH (e.g. `$(declareTable "./data/x.db" …)`) have their body bracketed with
+  a compile-time `setCurrentDirectory`, so splices that read files at compile time
+  resolve `./relative` paths against your tree instead of the throwaway project
+  dir. Only added when the notebook actually uses TH.
+* **In-place notebooks**: `-i` / `--in-place` rewrites a notebook over itself,
+  stripping and replacing previously rendered output. `reassemble` is now
+  idempotent — re-running no longer accumulates blank lines around code fences.
+* **Inline block errors**: a code block that fails to compile now renders its GHC
+  diagnostic beneath the block (stdout and stderr are captured as one ordered
+  stream) instead of producing silent empty output.
+* **Second local package**: new `-- cabal: packages: <dir>, …` directive for
+  depending on non-enclosing local packages (relative to the script). Local
+  package names — from `packages:`, `--package`, or the enclosing project — are
+  now added to the synthetic `build-depends` automatically, so their modules
+  import without a separate `build-depends` line.
+* **Output marker renamed** from `sabela:mime` to `scripths:mime`. The legacy
+  marker is still recognised when re-parsing older notebooks.
+
 ## 0.3.3.0 -- 2026-05-24
 
 * Build against **local packages**: auto-include the enclosing cabal project when a

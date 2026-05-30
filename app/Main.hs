@@ -2,6 +2,7 @@ module Main where
 
 import Control.Monad (unless, when)
 import Data.List (isPrefixOf)
+import Data.Maybe (isJust)
 import qualified Data.Text.IO as TIO
 import System.Directory (
     doesDirectoryExist,
@@ -9,7 +10,7 @@ import System.Directory (
     makeAbsolute,
  )
 import System.Environment (getArgs, getProgName)
-import System.Exit (exitFailure)
+import System.Exit (exitFailure, exitSuccess)
 import System.FilePath (takeExtension)
 import System.IO (hPutStrLn, stderr)
 
@@ -23,26 +24,48 @@ data Args = Args
     , argOutput :: Maybe FilePath
     , argPackages :: [FilePath]
     , argNoLocalProject :: Bool
+    , argInPlace :: Bool
+    , argHelp :: Bool
     }
 
 emptyArgs :: Args
-emptyArgs = Args Nothing Nothing [] False
+emptyArgs = Args Nothing Nothing [] False False False
 
 main :: IO ()
 main = do
     raw <- getArgs
     case parseArgs raw of
         Left err -> hPutStrLn stderr ("scripths: " ++ err) >> usage
-        Right a -> case argScript a of
-            Nothing -> usage
-            Just path -> do
-                pkgs <- mapM resolvePackageDir (argPackages a)
-                let opts =
-                        defaultRunOptions
-                            { roPackages = pkgs
-                            , roEnclosingProject = not (argNoLocalProject a)
-                            }
-                dispatch opts path (argOutput a)
+        Right a
+            | argHelp a -> help
+            | otherwise -> case argScript a of
+                Nothing -> usage
+                Just path -> do
+                    outPath <- resolveOutput a path
+                    pkgs <- mapM resolvePackageDir (argPackages a)
+                    let opts =
+                            defaultRunOptions
+                                { roPackages = pkgs
+                                , roEnclosingProject = not (argNoLocalProject a)
+                                }
+                    dispatch opts path outPath
+
+{- | Resolve the output destination, honouring @--in-place@: write back over the
+notebook itself. In-place is only meaningful for notebooks (the @.ghci@\/@.hs@
+path streams to stdout) and conflicts with an explicit @-o@.
+-}
+resolveOutput :: Args -> FilePath -> IO (Maybe FilePath)
+resolveOutput a path
+    | argInPlace a && isJust (argOutput a) =
+        die "--in-place cannot be combined with -o/--output"
+    | argInPlace a =
+        if isNotebook path
+            then pure (Just path)
+            else die "--in-place only applies to .md/.markdown notebooks"
+    | otherwise = pure (argOutput a)
+
+isNotebook :: FilePath -> Bool
+isNotebook path = takeExtension path `elem` [".md", ".markdown"]
 
 dispatch :: RunOptions -> FilePath -> Maybe FilePath -> IO ()
 dispatch opts path outputPath =
@@ -54,9 +77,9 @@ dispatch opts path outputPath =
             let sf = parseScript contents
             runScript opts path sf
 
-{- | Parse args: @[-o FILE | --output=FILE] [--package DIR | -p DIR |
---package=DIR]... [--no-local-project] <script>@. The script is the sole
-non-flag argument.
+{- | Parse args: @[-o FILE | --output=FILE] [-i | --in-place] [--package DIR |
+-p DIR | --package=DIR]... [--no-local-project] [-h | --help] <script>@. The
+script is the sole non-flag argument.
 -}
 parseArgs :: [String] -> Either String Args
 parseArgs = go emptyArgs
@@ -72,6 +95,8 @@ parseArgs = go emptyArgs
         | Just d <- stripFlag "--package=" tok =
             go a{argPackages = argPackages a ++ [d]} rest
         | tok == "--no-local-project" = go a{argNoLocalProject = True} rest
+        | tok == "-i" || tok == "--in-place" = go a{argInPlace = True} rest
+        | tok == "-h" || tok == "--help" = go a{argHelp = True} rest
         | "-" `isPrefixOf` tok = Left ("unknown flag: " ++ tok)
         | otherwise = case argScript a of
             Nothing -> go a{argScript = Just tok} rest
@@ -92,12 +117,37 @@ resolvePackageDir dir = do
 die :: String -> IO a
 die msg = hPutStrLn stderr ("scripths: " ++ msg) >> exitFailure
 
+-- | Full help, to stdout, exit success.
+help :: IO ()
+help = getProgName >>= putStr . helpText >> exitSuccess
+
+-- | Synopsis + a parse-error hint, to stderr, exit failure.
 usage :: IO ()
-usage = do
-    prog <- getProgName
-    putStrLn $
-        "Usage: "
-            ++ prog
-            ++ " [-o FILE | --output=FILE] [-p DIR | --package DIR]..."
-            ++ " [--no-local-project] <script>"
-    exitFailure
+usage = getProgName >>= hPutStrLn stderr . helpText >> exitFailure
+
+helpText :: String -> String
+helpText prog =
+    unlines
+        [ "Usage: " ++ prog ++ " [OPTIONS] <script>"
+        , ""
+        , "Run a .ghci/.hs script, or a .md/.markdown notebook (rendering each"
+        , "code block's output inline)."
+        , ""
+        , "Options:"
+        , "  -o FILE, --output=FILE   write notebook output to FILE"
+        , "  -i, --in-place           rewrite the notebook in place (overwrite <script>)"
+        , "  -p DIR, --package DIR     add a local package dir (also --package=DIR)"
+        , "  --no-local-project        do not auto-include the enclosing cabal project"
+        , "  -h, --help                show this help"
+        , ""
+        , "In-script directives (lines beginning '-- cabal:'):"
+        , "  -- cabal: build-depends: pkg1, pkg2"
+        , "  -- cabal: default-extensions: OverloadedStrings, LambdaCase"
+        , "  -- cabal: ghc-options: -Wall"
+        , "  -- cabal: packages: ../sibling-pkg        (extra local package dirs)"
+        , "  -- cabal: source-repository-package: <git-url> <ref> [subdir]"
+        , ""
+        , "Each code block should end in a single bare expression to be auto-printed;"
+        , "a block ending in a '<-' bind prints nothing — repeat the bound name on a"
+        , "final line to print it."
+        ]

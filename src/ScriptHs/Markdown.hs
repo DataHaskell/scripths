@@ -33,7 +33,7 @@ parseMarkdown' :: [Text] -> [Text] -> [Segment]
 parseMarkdown' acc [] = [Prose prose | not (T.null prose)]
   where
     prose = T.unlines acc
-parseMarkdown' acc (line : rest) = case T.strip <$> T.stripPrefix fence line of
+parseMarkdown' acc (line : rest) = case fenceLang line of
     Nothing -> parseMarkdown' (acc ++ [line]) rest
     Just lang ->
         let
@@ -41,7 +41,7 @@ parseMarkdown' acc (line : rest) = case T.strip <$> T.stripPrefix fence line of
             (codeLines, rest') = fmap (drop 1) (break ((== fence) . T.strip) rest)
             (output, rest'') = case dropWhile ((== "") . T.strip) rest' of
                 (x : xs) ->
-                    if not (T.isPrefixOf "> <!-- sabela:mime" x)
+                    if not (isMimeMarkerLine x)
                         then (Nothing, rest')
                         else
                             let
@@ -61,13 +61,50 @@ parseMarkdown' acc (line : rest) = case T.strip <$> T.stripPrefix fence line of
 fence :: Text
 fence = "```"
 
+{- | The language tag of a code-fence /opener/, or 'Nothing' if the line is not
+one. A fence is /exactly/ three backticks (optionally followed by a language
+tag) — a line of four or more backticks is not a fence and stays prose.
+-}
+fenceLang :: Text -> Maybe Text
+fenceLang line = do
+    rest <- T.stripPrefix fence line
+    if "`" `T.isPrefixOf` rest then Nothing else Just (T.strip rest)
+
+{- | The HTML-comment marker that tags a code block's rendered output with its
+MIME type. We render the @scripths:mime@ form; for backward compatibility we
+still recognise the legacy @sabela:mime@ marker when re-parsing older notebooks.
+-}
+mimeMarker :: Text
+mimeMarker = "<!-- scripths:mime "
+
+-- | Does this line open a rendered-output block (either marker spelling)?
+isMimeMarkerLine :: Text -> Bool
+isMimeMarkerLine x =
+    T.isPrefixOf "> <!-- scripths:mime" x || T.isPrefixOf "> <!-- sabela:mime" x
+
 fenceCodeSegment :: Text -> Text -> Text
 fenceCodeSegment lang output
     | T.null (T.strip output) = ""
     | otherwise = T.unlines ["", fence <> lang, T.stripEnd output, fence, ""]
 
+{- | Render segments back to markdown idempotently: the blank-line run at each
+seam between segments collapses to one blank line and the document's leading/
+trailing blanks are trimmed, so re-running (e.g. @--in-place@) adds no new lines.
+-}
 reassemble :: [Segment] -> Text
-reassemble = T.concat . map renderSegment
+reassemble = finalize . foldr (joinSeam . renderSegment) ""
+  where
+    joinSeam "" acc = acc
+    joinSeam piece "" = piece
+    joinSeam piece acc =
+        T.dropWhileEnd (== '\n') piece
+            <> T.replicate (min 2 (trailingNL piece + leadingNL acc)) "\n"
+            <> T.dropWhile (== '\n') acc
+    trailingNL = T.length . T.takeWhileEnd (== '\n')
+    leadingNL = T.length . T.takeWhile (== '\n')
+    finalize t =
+        let stripped = T.dropWhileEnd (== '\n') (T.dropWhile (== '\n') t)
+         in if T.null stripped then "" else stripped <> "\n"
 
 renderSegment :: Segment -> Text
 renderSegment (Prose t) = t
@@ -77,7 +114,7 @@ renderSegment (CodeBlock lang code (Just output)) = fenceCodeSegment lang code <
 blockQuote :: CodeOutput -> Text
 blockQuote (CodeOutput mimeType t) =
     let
-        ls = ("<!-- sabela:mime " <> mimeIndicator mimeType <> " -->") : T.lines t
+        ls = (mimeMarker <> mimeIndicator mimeType <> " -->") : T.lines t
         trimmed = reverse $ dropWhile T.null $ reverse ls
         quoted = T.unlines $ map (\l -> if T.null l then "> " else "> " <> l) trimmed
      in
@@ -101,5 +138,6 @@ mimeFromTag t
     | T.isInfixOf "text/latex" t = MimeLatex
     | T.isInfixOf "application/json" t = MimeJson
     | T.isInfixOf "base64" t =
-        MimeImage (T.takeWhile (/= ';') (T.drop (T.length "<!-- sabela:mime ") t))
+        -- The part after "mime " up to the ";base64", regardless of marker name.
+        MimeImage (T.strip (T.takeWhile (/= ';') (snd (T.breakOnEnd "mime " t))))
     | otherwise = MimePlain

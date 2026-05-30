@@ -10,7 +10,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import ScriptHs.Parser (
     CabalMeta (..),
-    Line,
+    Line (..),
     ScriptFile (scriptLines, scriptMeta),
     SourceRepoPin (..),
  )
@@ -27,10 +27,11 @@ import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, takeExtension, (</>))
 import System.IO (stderr)
 import System.Process (
-    CreateProcess (cwd, delegate_ctlc),
+    CreateProcess (cwd, delegate_ctlc, std_err, std_out),
+    StdStream (UseHandle),
+    createPipe,
     createProcess,
     proc,
-    readCreateProcessWithExitCode,
     waitForProcess,
  )
 
@@ -65,7 +66,8 @@ runWithCont cont opts scriptPath sf = do
     scriptAbsPath <- makeAbsolute scriptPath
     userCwd <- getCurrentDirectory
     warnUnknownKeys (metaUnknownKeys (scriptMeta sf))
-    projectDir <- ensureProject opts userCwd scriptAbsPath (scriptMeta sf) (scriptLines sf)
+    projectDir <-
+        ensureProject opts userCwd scriptAbsPath (scriptMeta sf) (scriptLines sf)
     cont userCwd projectDir (projectDir </> "script.ghci")
 
 -- | Warn (once each) about unrecognised @-- cabal:@ directive keys.
@@ -75,12 +77,21 @@ warnUnknownKeys keys =
         (\k -> TIO.hPutStrLn stderr ("scripths: warning: unknown '-- cabal:' key: " <> k))
         (nub keys)
 
+{- | Turn a script path into a valid cabal package name: non-alphanumerics become
+@-@, runs of @-@ collapse to one, and leading/trailing @-@ are stripped (so a name
+like @_probe.md@ does not yield an internal @--@, which cabal rejects).
+-}
 deriveProjectName :: FilePath -> String
-deriveProjectName path =
-    let sanitized = map (\c -> if isAlphaNum c then c else '-') path
-     in dropWhile (== '-') sanitized
+deriveProjectName =
+    trimDash . collapseDashes . map (\c -> if isAlphaNum c then c else '-')
+  where
+    collapseDashes ('-' : xs) = '-' : collapseDashes (dropWhile (== '-') xs)
+    collapseDashes (x : xs) = x : collapseDashes xs
+    collapseDashes [] = []
+    trimDash = f . f where f = reverse . dropWhile (== '-')
 
-ensureProject :: RunOptions -> FilePath -> FilePath -> CabalMeta -> [Line] -> IO FilePath
+ensureProject ::
+    RunOptions -> FilePath -> FilePath -> CabalMeta -> [Line] -> IO FilePath
 ensureProject opts userCwd scriptAbsPath meta scriptCode = do
     home <- getHomeDirectory
     let name = deriveProjectName scriptAbsPath
@@ -90,17 +101,38 @@ ensureProject opts userCwd scriptAbsPath meta scriptCode = do
         if roEnclosingProject opts
             then enclosingProjectFor scriptAbsPath (metaDeps meta)
             else pure []
-    let localPkgs = nub (roPackages opts ++ enclosing)
+    -- @-- cabal: packages:@ dirs are relative to the script file, not the cwd.
+    let scriptDir = takeDirectory scriptAbsPath
+    metaPkgDirs <-
+        mapM (makeAbsolute . (scriptDir </>) . T.unpack) (metaPackages meta)
+    let localPkgs = nub (roPackages opts ++ metaPkgDirs ++ enclosing)
     writeManagedCabalProject
         (projectDir </> "cabal.project")
         (renderCabalProject localPkgs (metaSourceRepos meta))
+    -- A local package only imports if its name is also a build-depend; collect
+    -- the names so renderCabalFile can add them (and warn on dirs without one).
+    localNames <- localPackageNames localPkgs
+    -- When the notebook uses Template Haskell, its splices read files at compile
+    -- time; bracket the body with compile-time chdirs so those resolve against
+    -- the user's tree (see 'compileCdTo'). This needs @template-haskell@.
+    let th = usesTemplateHaskell meta scriptCode
+        extraDeps = localNames ++ ["template-haskell" | th]
     let mainHsPath = projectDir </> "Main.hs"
     mainHsExists <- doesFileExist mainHsPath
     unless mainHsExists $ writeFile mainHsPath "main :: IO ()\nmain = pure ()\n"
-    writeFile (projectDir </> (name ++ ".cabal")) (renderCabalFile name meta)
+    writeFile
+        (projectDir </> (name ++ ".cabal"))
+        (renderCabalFile name extraDeps meta)
+    let body
+            | th =
+                compileCdSetup
+                    <> compileCdTo userCwd
+                    <> toGhciScript scriptCode
+                    <> compileCdTo projectDir
+            | otherwise = toGhciScript scriptCode
     TIO.writeFile
         (projectDir </> "script.ghci")
-        (autoPrintDirective <> cdDirective userCwd <> toGhciScript scriptCode)
+        (autoPrintDirective <> cdDirective userCwd <> body)
     pure projectDir
 
 {- | Make GHCi auto-print a trailing 'String' result /raw/ (via 'putStr')
@@ -137,6 +169,45 @@ cdDirective dir =
             [ "import qualified System.Directory as ScripthsInternalDir"
             , "ScripthsInternalDir.setCurrentDirectory " <> show dir
             ]
+
+{- | Does this notebook use Template Haskell (a @TemplateHaskell@ ext/pragma, a
+@template-haskell@ dep, or a @$(…)@ splice line)? If so its splices read files at
+compile time, so we bracket the body with compile-time chdirs ('compileCdTo').
+-}
+usesTemplateHaskell :: CabalMeta -> [Line] -> Bool
+usesTemplateHaskell meta ls =
+    any (T.isInfixOf "TemplateHaskell") (metaExts meta)
+        || any ((== "template-haskell") . depPkgName) (metaDeps meta)
+        || any isSpliceLine ls
+  where
+    isSpliceLine (HaskellLine t) =
+        let s = T.stripStart t in "$(" `T.isPrefixOf` s || "_ = ();" `T.isPrefixOf` s
+    isSpliceLine (Pragma t) = "TemplateHaskell" `T.isInfixOf` t
+    isSpliceLine _ = False
+
+{- | Enable @TemplateHaskell@ and bring TH's @runIO@ into scope for the
+compile-time chdir splices. Emitted only when 'usesTemplateHaskell'.
+-}
+compileCdSetup :: T.Text
+compileCdSetup =
+    T.unlines
+        [ ":set -XTemplateHaskell"
+        , "import qualified Language.Haskell.TH.Syntax as ScripthsInternalTH"
+        ]
+
+{- | A GHCi top-level auto-splice (type @Q [Dec]@) running @setCurrentDirectory@
+at compile time, moving the process the /later/ splices compile in. Used pointed
+at the user's cwd before the blocks and back at the project dir after them.
+-}
+compileCdTo :: FilePath -> T.Text
+compileCdTo dir =
+    T.unlines
+        [ ":{"
+        , "_ = (); ScripthsInternalTH.runIO (ScripthsInternalDir.setCurrentDirectory "
+            <> T.pack (show dir)
+            <> ") Prelude.>> Prelude.pure []"
+        , ":}"
+        ]
 
 {- | First line of a scripths-generated @cabal.project@. We regenerate only
 files that carry it (or the legacy @packages: .@ default), never hand-edited ones.
@@ -186,10 +257,7 @@ enclosingProjectFor scriptAbsPath deps = go (takeDirectory scriptAbsPath)
   where
     names = map depPkgName deps
     go dir = do
-        cabals <- findCabalFiles dir
-        mName <- case cabals of
-            (cf : _) -> readCabalPackageName (dir </> cf)
-            [] -> pure Nothing
+        mName <- packageNameInDir dir
         case mName of
             Just nm | nm `elem` names -> pure [dir]
             _ ->
@@ -199,6 +267,31 @@ enclosingProjectFor scriptAbsPath deps = go (takeDirectory scriptAbsPath)
 -- | Package name from a build-depends item (drops version bounds and @:sublib@).
 depPkgName :: T.Text -> T.Text
 depPkgName = T.takeWhile (\c -> isAlphaNum c || c == '-' || c == '_') . T.stripStart
+
+-- | The cabal package name declared in @dir@ (from its first @.cabal@ file).
+packageNameInDir :: FilePath -> IO (Maybe T.Text)
+packageNameInDir dir = do
+    cabals <- findCabalFiles dir
+    case cabals of
+        (cf : _) -> readCabalPackageName (dir </> cf)
+        [] -> pure Nothing
+
+{- | Names of the local packages, for adding to the script's @build-depends@ so
+their modules are actually in scope. A dir without a @.cabal@ (it'll also be a
+bad @packages:@ entry) is warned about and skipped.
+-}
+localPackageNames :: [FilePath] -> IO [T.Text]
+localPackageNames = fmap concat . mapM nameOrWarn
+  where
+    nameOrWarn dir = do
+        mName <- packageNameInDir dir
+        case mName of
+            Just nm -> pure [nm]
+            Nothing -> do
+                TIO.hPutStrLn
+                    stderr
+                    ("scripths: warning: no .cabal package found in " <> T.pack dir)
+                pure []
 
 findCabalFiles :: FilePath -> IO [FilePath]
 findCabalFiles dir = do
@@ -219,11 +312,17 @@ readCabalPackageName path = do
             , "name:" `T.isPrefixOf` T.toLower (T.stripStart ln)
             ]
 
-renderCabalFile :: String -> CabalMeta -> String
-renderCabalFile name CabalMeta{metaDeps, metaExts, metaGhcOptions} =
-    let deps = nub ("base" : "directory" : map T.unpack metaDeps)
+{- | Render the synthetic package's @.cabal@. @extraLocalDeps@ are the names of
+local packages (from @--package@, @-- cabal: packages:@, or the enclosing
+project) added to @build-depends@ so their modules import.
+-}
+renderCabalFile :: String -> [T.Text] -> CabalMeta -> String
+renderCabalFile name extraLocalDeps CabalMeta{metaDeps, metaExts, metaGhcOptions} =
+    let deps = nub ("base" : "directory" : map T.unpack (metaDeps ++ extraLocalDeps))
         depsStr = intercalate ", " deps
-        extsStr = intercalate ", " (map T.unpack metaExts)
+        -- OverloadedStrings is on by default in every scripths repl.
+        exts = nub ("OverloadedStrings" : map T.unpack metaExts)
+        extsStr = intercalate ", " exts
         optsStr = unwords (map T.unpack metaGhcOptions)
      in unlines
             [ "cabal-version: 3.0"
@@ -249,15 +348,27 @@ cabalArgs projectDir ghciPath =
     , "--repl-option=return()"
     ]
 
+{- | Run the repl, capturing stdout and stderr as one /ordered/ stream so a
+failing block's diagnostics (GHCi writes them to stderr) stay interleaved with
+the block markers and render inline. Read to EOF before 'waitForProcess'.
+-}
 captureGhc :: FilePath -> FilePath -> FilePath -> IO T.Text
 captureGhc userCwd projectDir ghciPath = do
     let args = "-v0" : cabalArgs projectDir ghciPath
-        cp = (proc "cabal" args){cwd = Just userCwd}
-    (code, out, err) <- readCreateProcessWithExitCode cp ""
+    (readEnd, writeEnd) <- createPipe
+    (_, _, _, ph) <-
+        createProcess
+            (proc "cabal" args)
+                { cwd = Just userCwd
+                , std_out = UseHandle writeEnd
+                , std_err = UseHandle writeEnd
+                }
+    out <- TIO.hGetContents readEnd
+    code <- waitForProcess ph
     case code of
-        ExitSuccess -> pure (T.pack $ out <> err)
+        ExitSuccess -> pure out
         ExitFailure _ -> do
-            TIO.hPutStrLn stderr (T.pack err)
+            TIO.hPutStr stderr out
             exitWith code
 
 runGhc :: FilePath -> FilePath -> FilePath -> IO ()

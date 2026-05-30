@@ -44,6 +44,22 @@ markdownTests =
                         lang @?= "haskell"
                         assertBool "has print 42" (T.isInfixOf "print 42" code)
                     other -> assertFailure $ "expected [CodeBlock], got: " ++ show other
+            , testCase "four backticks is not a code fence" $ do
+                let input =
+                        T.unlines
+                            [ "````haskell"
+                            , "print 42"
+                            , "````"
+                            ]
+                let segs = parseMarkdown input
+                case segs of
+                    [Prose _] -> pure ()
+                    other -> assertFailure $ "expected [Prose], got: " ++ show other
+            , testCase "exactly three backticks with a tag is a fence" $ do
+                let segs = parseMarkdown (T.unlines ["```haskell", "print 42", "```"])
+                case segs of
+                    [CodeBlock "haskell" _ _] -> pure ()
+                    other -> assertFailure $ "expected [CodeBlock haskell], got: " ++ show other
             , testCase "prose then code" $ do
                 let input =
                         T.unlines
@@ -89,7 +105,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [(CodeBlock _ _ (Just (CodeOutput m _))), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
+                    [CodeBlock _ _ (Just (CodeOutput m _)), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "svg mimetype" $ do
                 let input =
@@ -106,7 +122,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [(CodeBlock _ _ (Just (CodeOutput m _))), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
+                    [CodeBlock _ _ (Just (CodeOutput m _)), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "multiple code blocks" $ do
                 let input =
@@ -117,7 +133,7 @@ markdownTests =
                             , "print 1"
                             , "```"
                             , ""
-                            , "> <!-- sabela:mime text/plain -->"
+                            , "> <!-- scripths:mime text/plain -->"
                             , "> 1"
                             , ""
                             , "Middle text."
@@ -126,7 +142,7 @@ markdownTests =
                             , "print 2"
                             , "```"
                             , ""
-                            , "> <!-- sabela:mime text/plain -->"
+                            , "> <!-- scripths:mime text/plain -->"
                             , "> 2"
                             ]
                 let segs = parseMarkdown input
@@ -229,7 +245,86 @@ markdownTests =
             , testCase "empty lines in output get bare >" $ do
                 let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "a\n\nb")]
                 assertBool "has bare >" (T.isInfixOf "\n> \n" result)
+            , testCase "renders the scripths:mime marker (not the legacy sabela)" $ do
+                let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "y")]
+                assertBool "uses scripths:mime" (T.isInfixOf "scripths:mime" result)
+                assertBool "no sabela:mime" (not (T.isInfixOf "sabela:mime" result))
             ]
+        , testGroup
+            "idempotency (no extra blank lines on re-run)"
+            [ testCase "round-trip is a fixed point" $ do
+                let once = roundTrip docWithOutput
+                    twice = roundTrip once
+                twice @?= once
+            , testCase "newline count does not grow across re-runs" $ do
+                let once = roundTrip docWithOutput
+                    twice = roundTrip once
+                nlCount twice @?= nlCount once
+            , testCase "prose->code seam is exactly one blank line" $ do
+                let r = roundTrip "a\n\n```haskell\nx\n```\n"
+                assertBool "one blank before fence" (T.isInfixOf "a\n\n```haskell" r)
+                assertBool "not two blanks" (not (T.isInfixOf "a\n\n\n```" r))
+            , testCase "multiple authored blanks around a fence collapse to one" $ do
+                let r = roundTrip "a\n\n\n\n```haskell\nx\n```\n"
+                assertBool "collapsed to one blank" (T.isInfixOf "a\n\n```haskell" r)
+                assertBool "no triple newline" (not (T.isInfixOf "a\n\n\n" r))
+            , testCase "doc starting with a code block has no leading blank line" $ do
+                let r = roundTrip "```haskell\nx\n```\n"
+                assertBool "no leading newline" (not (T.isPrefixOf "\n" r))
+            , testCase "trailing blank lines collapse to a single newline" $ do
+                let r = roundTrip "# Title\n\n```haskell\nx\n```\n"
+                assertBool "ends with single newline" (T.isSuffixOf "```\n" r)
+                assertBool "not a trailing blank line" (not (T.isSuffixOf "```\n\n" r))
+            , testCase "prose-only document is untouched" $ do
+                roundTrip "# Title\n\nJust prose.\n" @?= "# Title\n\nJust prose.\n"
+            , testCase "legacy sabela:mime output is recognised and re-rendered as scripths" $ do
+                let legacy =
+                        T.unlines
+                            [ "```haskell"
+                            , "1 + 1"
+                            , "```"
+                            , ""
+                            , "> <!-- sabela:mime text/plain -->"
+                            , "> 2"
+                            ]
+                    r = roundTrip legacy
+                assertBool "output preserved" (T.isInfixOf "> 2" r)
+                assertBool "upgraded to scripths:mime" (T.isInfixOf "scripths:mime" r)
+                assertBool "old output not duplicated" (not (T.isInfixOf "sabela:mime" r))
+                -- and the upgraded form is itself stable
+                roundTrip r @?= r
+            ]
+        ]
+
+roundTrip :: Text -> Text
+roundTrip = reassemble . parseMarkdown
+
+nlCount :: Text -> Int
+nlCount = T.length . T.filter (== '\n')
+
+-- A notebook that already carries rendered output, as an in-place re-run sees it.
+docWithOutput :: Text
+docWithOutput =
+    T.unlines
+        [ "# Title"
+        , ""
+        , "Intro prose."
+        , ""
+        , "```haskell"
+        , "1 + 1"
+        , "```"
+        , ""
+        , "> <!-- scripths:mime text/plain -->"
+        , "> 2"
+        , ""
+        , "More prose."
+        , ""
+        , "```haskell"
+        , "2 + 2"
+        , "```"
+        , ""
+        , "> <!-- scripths:mime text/plain -->"
+        , "> 4"
         ]
 
 indexOf :: Text -> Text -> Int

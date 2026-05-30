@@ -10,7 +10,14 @@ import Test.Tasty.HUnit (
 
 import qualified Data.Text as T
 import ScriptHs.Parser (
-    CabalMeta (metaDeps, metaExts, metaGhcOptions, metaSourceRepos, metaUnknownKeys),
+    CabalMeta (
+        metaDeps,
+        metaExts,
+        metaGhcOptions,
+        metaPackages,
+        metaSourceRepos,
+        metaUnknownKeys
+    ),
     Line (..),
     ScriptFile (scriptLines, scriptMeta),
     SourceRepoPin (..),
@@ -79,6 +86,9 @@ parseTests =
             , testCase "ghc-options" $ do
                 let sf = parseScript "-- cabal: ghc-options: -threaded, -O2\n"
                 (metaGhcOptions . scriptMeta) sf @?= ["-threaded", "-O2"]
+            , testCase "packages directive lists extra local package dirs" $ do
+                let sf = parseScript "-- cabal: packages: ../th, ../persistent\n"
+                (metaPackages . scriptMeta) sf @?= ["../th", "../persistent"]
             , testCase "metadata stripped from lines" $ do
                 let input =
                         T.unlines

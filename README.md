@@ -7,9 +7,11 @@ GHCi scripts for standalone execution and Markdown documentation.
 ## Features
 
 - **Standalone `.ghci` execution** — Run GHCi scripts directly from the command line, with automatic dependency.
-- **Cabal metadata directives** — Declare `build-depends`, `default-extensions`, and `ghc-options` inline using `-- cabal:` comments.
-- **Markdown notebooks** — Execute Haskell code blocks inside Markdown files and render the output back into the document as block quotes.
+- **Cabal metadata directives** — Declare `build-depends`, `default-extensions`, `ghc-options`, and local `packages` inline using `-- cabal:` comments.
+- **Markdown notebooks** — Execute Haskell code blocks inside Markdown files and render the output back into the document as block quotes. Re-run in place with `-i` — output is replaced cleanly, with no accumulating blank lines.
+- **Inline errors** — A block that fails to compile renders its GHC error beneath the block instead of producing silent empty output.
 - **Smart GHCi rendering** — Multi-line definitions are automatically wrapped in `:{`/`:}` blocks, and IO binds / Template Haskell splices are handled correctly as individual statements.
+- **Compile-time TH reads your tree** — A splice that reads a file at compile time (e.g. `$(declareTable "./data/x.db" …)`) resolves `./relative` paths against the directory you ran `scripths` from, not the internal build directory.
 
 ## Installation
 
@@ -20,10 +22,12 @@ cabal install scripths
 ## CLI Usage
 
 ```
-scripths [-o FILE | --output=FILE] [-p DIR | --package DIR]... [--no-local-project] <script>
+scripths [-o FILE | --output=FILE] [-i | --in-place] [-p DIR | --package DIR]... [--no-local-project] [-h | --help] <script>
 ```
 
-When `-o` / `--output` is provided for Markdown files, the result is written to that path. Otherwise it is printed to stdout. The file extension determines the mode. `.ghci` / `hs` files are parsed and executed as a standalone GHCi script. `.md` / `.markdown` files are processed as a notebook with captured output.
+When `-o` / `--output` is provided for Markdown files, the result is written to that path. Otherwise it is printed to stdout. With `-i` / `--in-place` the notebook is rewritten in place: any previously rendered output is stripped and replaced, and re-running is idempotent (it does not accumulate blank lines). `-i` is only valid for `.md` / `.markdown` notebooks and cannot be combined with `-o`.
+
+The file extension determines the mode. `.ghci` / `hs` files are parsed and executed as a standalone GHCi script. `.md` / `.markdown` files are processed as a notebook with captured output. Run `scripths --help` for the full option and directive list.
 
 Requires GHC and cabal-install on your PATH.
 
@@ -86,7 +90,16 @@ Run it and write the results to a new file:
 scripths -o output.md notebook.md
 ```
 
-Each Haskell code block is evaluated in order, and its output is inserted into the Markdown as a block quote beneath the code fence.
+Each Haskell code block is evaluated in order, and its output is inserted into the Markdown as a block quote beneath the code fence (tagged with a `<!-- scripths:mime … -->` marker so a later run can find and replace it). If a block fails to compile, its GHC error is rendered inline beneath that block rather than vanishing.
+
+> **Tip:** each code block should end in a single bare expression so it is auto-printed. A block that ends in a `<-` bind (or several `;`-joined statements) prints nothing — repeat the bound name on a final line to print it:
+>
+> ````markdown
+> ```haskell
+> x <- pure 42
+> x
+> ```
+> ````
 
 ## Cabal Metadata Directives
 
@@ -96,7 +109,13 @@ You can declare dependencies, language extensions, and GHC options directly insi
 -- cabal: build-depends: text, containers
 -- cabal: default-extensions: OverloadedStrings, TypeApplications
 -- cabal: ghc-options: -Wall
+-- cabal: packages: ../sibling-pkg
+-- cabal: source-repository-package: https://github.com/owner/repo v1.2.3
 ```
+
+The recognised keys are `build-depends`, `default-extensions`, `ghc-options`, `packages` (extra local package directories, relative to the script), and `source-repository-package`. An unrecognised key is reported as a warning.
+
+`OverloadedStrings` is enabled in every scripths repl by default, so string literals work directly as `Text` / `ByteString`; add any further extensions with `default-extensions`.
 
 ## Local packages
 
@@ -130,6 +149,24 @@ shared document. Repeatable.
 ```bash
 scripths --package ../granite -o out.md in.md
 ```
+
+The package's name is read from its `.cabal` and added to the script's
+`build-depends` automatically, so its modules are importable without also listing
+it in a `-- cabal: build-depends:` line.
+
+### `packages:` directive (committed into the document)
+
+To depend on one or more local packages *from inside the document itself* — for
+example a second, non-enclosing package in the same repo — list their directories
+(relative to the script) with a `packages` directive:
+
+```
+-- cabal: packages: ../sibling-pkg, ../another-local
+```
+
+Like `--package`, each named package's name is added to `build-depends`
+automatically. Unlike `--package`, the dependency travels with the document. Paths
+are resolved relative to the script file.
 
 ### Pinned git packages (`source-repository-package`)
 
