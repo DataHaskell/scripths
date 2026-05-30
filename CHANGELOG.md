@@ -1,5 +1,9 @@
 # Revision history for scripths
 
+
+## 0.4.0.1 -- 2026-05-30
+* Parse pandoc markdown code fences as haskel code fences.
+
 ## 0.4.0.0 -- 2026-05-29
 
 * **`OverloadedStrings` on by default** in every scripths repl, so string literals
