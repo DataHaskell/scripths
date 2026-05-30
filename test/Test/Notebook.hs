@@ -10,6 +10,7 @@ import ScriptHs.Notebook (
     addOutputToSegments,
     generatedMarkedScript,
     isHaskell,
+    isPython,
     mkIndexedCodeSegments,
     mkMarker,
     parseBlocks,
@@ -37,6 +38,28 @@ notebookTests =
                 isHaskell "python" @?= False
                 isHaskell "" @?= False
                 isHaskell "hask" @?= False
+            , testCase "accepts pandoc attribute fences" $ do
+                isHaskell "{.haskell:hs}" @?= True
+                isHaskell "{haskell}" @?= True
+                isHaskell "{.haskell}" @?= True
+                isHaskell "{.haskell:ghci}" @?= True
+            , testCase "pandoc python fences are not haskell" $ do
+                isHaskell "{.python}" @?= False
+                isHaskell "{python}" @?= False
+                isHaskell "{.python:py}" @?= False
+            ]
+        , testGroup
+            "isPython"
+            [ testCase "accepts python and py" $ do
+                isPython "python" @?= True
+                isPython "py" @?= True
+            , testCase "accepts pandoc attribute fences" $ do
+                isPython "{.python:py}" @?= True
+                isPython "{python}" @?= True
+                isPython "{.python}" @?= True
+            , testCase "rejects haskell" $ do
+                isPython "haskell" @?= False
+                isPython "{.haskell:hs}" @?= False
             ]
         , testGroup
             "mkMarker"

@@ -99,4 +99,23 @@ mkMarker :: Int -> Text
 mkMarker n = "---SCRIPTHS_BLOCK_" <> T.pack (show n) <> "_END---"
 
 isHaskell :: Text -> Bool
-isHaskell lang = T.toLower (T.strip lang) `elem` ["haskell", "hs"]
+isHaskell lang = fenceLanguage lang `elem` ["haskell", "hs"]
+
+isPython :: Text -> Bool
+isPython lang = fenceLanguage lang `elem` ["python", "py"]
+
+{- | The base language name of a code-fence info string, lower-cased and
+trimmed. Handles both bare tags (@haskell@, @hs@) and Pandoc-style attribute
+tags: @{haskell}@, @{.haskell}@, @{.haskell:hs}@, @{.haskell:ghci}@.
+-}
+fenceLanguage :: Text -> Text
+fenceLanguage lang =
+    let stripped = T.strip lang
+        inner = case T.stripPrefix "{" stripped of
+            Just s -> T.takeWhile (/= '}') s
+            Nothing -> stripped
+        token = case T.words inner of
+            (t : _) -> t
+            [] -> ""
+        base = T.takeWhile (/= ':') (T.dropWhile (== '.') token)
+     in T.toLower base
