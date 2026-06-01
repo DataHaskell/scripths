@@ -1,3 +1,4 @@
+-- scripths: 0.4.1.0
 double :: Int -> Int
 double = (*2)
 

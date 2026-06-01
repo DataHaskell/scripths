@@ -1,6 +1,23 @@
 # Revision history for scripths
 
 
+## 0.4.1.0 -- 2056-05-31
+* **Custom-prelude support**: auto print (our hook to rout evething but strings to shw)
+  now doesn't assume a prelude.
+* **Cleaner error rendering** (notebooks): don't leak internals when printing errors.
+* **Version tag**: files may carry a first-line tag recording the scripths that
+  wrote them — `-- scripths: X` in `.ghci`/`.hs` scripts, `<!-- scripths: X -->`
+  in `.md`/`.markdown` notebooks. Running a file that declares a *newer* scripths
+  than the binary prints a warning and continues. scripths stamps/refreshes the
+  tag when it writes a notebook (`-o`/`--in-place`); stdout output is left
+  unstamped. The tag is recognised after a leading `#!` shebang (scripts) or YAML
+  frontmatter block (notebooks), tolerating a BOM, CRLF, and indentation.
+  Behaviour change: the first `--in-place` run on an existing notebook inserts the
+  `<!-- scripths: X -->` line (and normalises leading blank lines), a one-time
+  visible diff in tracked files; it is invisible when rendered and idempotent
+  thereafter.
+* **`scripths --version` / `-v`** prints the scripths version.
+
 ## 0.4.0.1 -- 2026-05-30
 * Parse pandoc markdown code fences as haskel code fences.
 

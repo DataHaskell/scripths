@@ -1,3 +1,5 @@
+<!-- scripths: 0.4.1.0 -->
+
 # Pinning a dependency to a git ref
 
 scripths can build a notebook against a specific **git commit or tag** of a

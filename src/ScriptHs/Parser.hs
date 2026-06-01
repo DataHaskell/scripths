@@ -28,6 +28,8 @@ import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
 
+import ScriptHs.Version (TagStyle (ScriptTag), parseTagLine)
+
 {- | A fully parsed script, consisting of aggregated cabal metadata and an
 ordered list of code lines.
 -}
@@ -117,11 +119,24 @@ ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions
 -}
 parseScript :: Text -> ScriptFile
 parseScript input =
-    let textLines = T.lines input
+    let textLines = dropLeadingVersionTag (T.lines input)
         parsedLines = map parseLine textLines
         (metas, code) = partitionLines parsedLines
         meta = mergeMetas metas
      in ScriptFile{scriptMeta = meta, scriptLines = code}
+
+{- | Drop a leading scripths version tag (the first non-blank line, when it is
+one) so it is not emitted into the repl. Recognised via the single parser in
+"ScriptHs.Version" — so an arbitrary @-- scripths:@ comment elsewhere in the body
+is left untouched, and the recognizer cannot drift from the one used to read the
+tag.
+-}
+dropLeadingVersionTag :: [Text] -> [Text]
+dropLeadingVersionTag ls = case span isBlank ls of
+    (blanks, tag : rest) | isJust (parseTagLine ScriptTag tag) -> blanks ++ rest
+    _ -> ls
+  where
+    isBlank = T.null . T.strip
 
 data RawLine
     = RawCabalMeta CabalMeta

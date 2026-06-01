@@ -8,7 +8,6 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 import ScriptHs.Parser (CabalMeta (..), Line (..), SourceRepoPin (..))
 import ScriptHs.Run (
     cabalArgs,
-    compileCdTo,
     deriveProjectName,
     renderCabalFile,
     renderCabalProject,
@@ -24,14 +23,20 @@ runTests =
         "Run"
         [ testGroup
             "cabalArgs"
-            [ testCase "uses -ghci-script= and -e return() for batch mode" $ do
+            [ testCase "uses -ghci-script= and a prelude-free -e terminator for batch mode" $ do
                 let args = cabalArgs "/proj" "/proj/script.ghci"
                     replyOpts = filter ("--repl-option=" `isPrefixOf`) args
                 replyOpts
                     @?= [ "--repl-option=-ghci-script=/proj/script.ghci"
                         , "--repl-option=-e"
-                        , "--repl-option=return()"
+                        , "--repl-option=ScripthsInternalIO.hFlush(ScripthsInternalIO.stdout)"
                         ]
+            , testCase
+                "the -e terminator has no spaces (cabal splits --repl-option on whitespace)"
+                $ do
+                    let args = cabalArgs "/proj" "/proj/script.ghci"
+                        eTerm = last (filter ("--repl-option=" `isPrefixOf`) args)
+                    assertBool "no space in terminator" (not (' ' `elem` eTerm))
             , testCase "includes --project-dir" $ do
                 let args = cabalArgs "/proj" "/proj/script.ghci"
                 assertBool "--project-dir present" $
@@ -102,14 +107,6 @@ runTests =
             , testCase "false for a plain notebook" $
                 usesTemplateHaskell emptyMeta [HaskellLine "1 + 1", Import "import Data.List"]
                     @?= False
-            ]
-        , testGroup
-            "compileCdTo"
-            [ testCase "renders a compile-time setCurrentDirectory splice" $ do
-                let txt = compileCdTo "/some/dir"
-                assertBool "splice block" (T.isInfixOf ":{" txt)
-                assertBool "chdir call" (T.isInfixOf "setCurrentDirectory" txt)
-                assertBool "the target dir" (T.isInfixOf "/some/dir" txt)
             ]
         ]
   where

@@ -1,3 +1,5 @@
+<!-- scripths: 0.4.1.0 -->
+
 # Sabela Example
 
 This is an example of Sabela, a reactive notebook system for Haskell.

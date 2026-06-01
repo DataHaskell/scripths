@@ -3,6 +3,7 @@ module Main where
 import Control.Monad (unless, when)
 import Data.List (isPrefixOf)
 import Data.Maybe (isJust)
+import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory (
     doesDirectoryExist,
@@ -17,6 +18,12 @@ import System.IO (hPutStrLn, stderr)
 import ScriptHs.Notebook (runNotebook)
 import ScriptHs.Parser (parseScript)
 import ScriptHs.Run (RunOptions (..), defaultRunOptions, runScript)
+import ScriptHs.Version (
+    newerVersionWarning,
+    scripthsVersionText,
+    tagStyleFor,
+    tagVersion,
+ )
 
 -- | Parsed command-line options.
 data Args = Args
@@ -26,10 +33,11 @@ data Args = Args
     , argNoLocalProject :: Bool
     , argInPlace :: Bool
     , argHelp :: Bool
+    , argVersion :: Bool
     }
 
 emptyArgs :: Args
-emptyArgs = Args Nothing Nothing [] False False False
+emptyArgs = Args Nothing Nothing [] False False False False
 
 main :: IO ()
 main = do
@@ -37,10 +45,12 @@ main = do
     case parseArgs raw of
         Left err -> hPutStrLn stderr ("scripths: " ++ err) >> usage
         Right a
+            | argVersion a -> printVersion
             | argHelp a -> help
             | otherwise -> case argScript a of
                 Nothing -> usage
                 Just path -> do
+                    warnIfNewer path
                     outPath <- resolveOutput a path
                     pkgs <- mapM resolvePackageDir (argPackages a)
                     let opts =
@@ -97,6 +107,7 @@ parseArgs = go emptyArgs
         | tok == "--no-local-project" = go a{argNoLocalProject = True} rest
         | tok == "-i" || tok == "--in-place" = go a{argInPlace = True} rest
         | tok == "-h" || tok == "--help" = go a{argHelp = True} rest
+        | tok == "-v" || tok == "--version" = go a{argVersion = True} rest
         | "-" `isPrefixOf` tok = Left ("unknown flag: " ++ tok)
         | otherwise = case argScript a of
             Nothing -> go a{argScript = Just tok} rest
@@ -116,6 +127,23 @@ resolvePackageDir dir = do
 
 die :: String -> IO a
 die msg = hPutStrLn stderr ("scripths: " ++ msg) >> exitFailure
+
+-- | Print @\<prog\> \<version\>@ to stdout, exit success.
+printVersion :: IO ()
+printVersion = do
+    prog <- getProgName
+    putStrLn (prog ++ " " ++ T.unpack scripthsVersionText)
+    exitSuccess
+
+{- | Warn (to stderr, then continue) if the file's first-line version tag
+declares a scripths newer than this binary — its syntax may not fully parse.
+-}
+warnIfNewer :: FilePath -> IO ()
+warnIfNewer path = do
+    contents <- TIO.readFile path
+    case tagVersion (tagStyleFor path) contents >>= newerVersionWarning of
+        Just w -> hPutStrLn stderr ("scripths: warning: " ++ T.unpack w)
+        Nothing -> pure ()
 
 -- | Full help, to stdout, exit success.
 help :: IO ()
@@ -139,6 +167,11 @@ helpText prog =
         , "  -p DIR, --package DIR     add a local package dir (also --package=DIR)"
         , "  --no-local-project        do not auto-include the enclosing cabal project"
         , "  -h, --help                show this help"
+        , "  -v, --version             show the scripths version"
+        , ""
+        , "Files may carry a first-line version tag recording the scripths that wrote"
+        , "them ('-- scripths: X' in scripts, '<!-- scripths: X -->' in notebooks); a"
+        , "file declaring a newer scripths than this binary is run with a warning."
         , ""
         , "In-script directives (lines beginning '-- cabal:'):"
         , "  -- cabal: build-depends: pkg1, pkg2"

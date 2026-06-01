@@ -11,10 +11,12 @@ import ScriptHs.Notebook (
     generatedMarkedScript,
     isHaskell,
     isPython,
+    markerStatement,
     mkIndexedCodeSegments,
     mkMarker,
     parseBlocks,
     processNotebook,
+    scrubCellOutput,
     splitByMarkers,
  )
 
@@ -173,12 +175,16 @@ notebookTests =
                     m11 = mkMarker 11
 
                 assertBool
-                    "has putStrLn marker 10"
-                    (HaskellLine ("putStrLn " <> T.pack (show (T.unpack m10))) `elem` ls)
+                    "has marker statement 10"
+                    (HaskellLine (markerStatement m10) `elem` ls)
 
                 assertBool
-                    "has putStrLn marker 11"
-                    (HaskellLine ("putStrLn " <> T.pack (show (T.unpack m11))) `elem` ls)
+                    "has marker statement 11"
+                    (HaskellLine (markerStatement m11) `elem` ls)
+
+                assertBool
+                    "marker print is prelude-qualified"
+                    (T.isInfixOf ".putStrLn" (markerStatement m10))
 
                 assertBool "has Blank separators" (Blank `elem` ls)
             ]
@@ -230,5 +236,17 @@ notebookTests =
                             ]
                 out <- processNotebook defaultRunOptions "" input
                 out @?= input
+            ]
+        , testGroup
+            "scrubCellOutput"
+            [ testCase "removes a block marker that survived splitting" $ do
+                let out = "line one\n" <> mkMarker 1 <> "\nline two"
+                    scrubbed = scrubCellOutput [0, 1, 2] out
+                assertBool "no marker leaks" (not (T.isInfixOf "SCRIPTHS_BLOCK" scrubbed))
+                assertBool "keeps the stdout" (T.isInfixOf "line one" scrubbed)
+            , testCase "scrubs scripths internal identifiers from a cell error" $ do
+                let scrubbed =
+                        scrubCellOutput [0] "No instance for Show .. use of scripthsAutoPrint"
+                assertBool "no autoprint name" (not (T.isInfixOf "scripthsAutoPrint" scrubbed))
             ]
         ]

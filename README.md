@@ -12,6 +12,7 @@ GHCi scripts for standalone execution and Markdown documentation.
 - **Inline errors** — A block that fails to compile renders its GHC error beneath the block instead of producing silent empty output.
 - **Smart GHCi rendering** — Multi-line definitions are automatically wrapped in `:{`/`:}` blocks, and IO binds / Template Haskell splices are handled correctly as individual statements.
 - **Compile-time TH reads your tree** — A splice that reads a file at compile time (e.g. `$(declareTable "./data/x.db" …)`) resolves `./relative` paths against the directory you ran `scripths` from, not the internal build directory.
+- **Version tag** — Files record the scripths that wrote them on their first line; running a file authored by a newer scripths than your binary prints a warning rather than failing.
 
 ## Installation
 
@@ -22,12 +23,23 @@ cabal install scripths
 ## CLI Usage
 
 ```
-scripths [-o FILE | --output=FILE] [-i | --in-place] [-p DIR | --package DIR]... [--no-local-project] [-h | --help] <script>
+scripths [-o FILE | --output=FILE] [-i | --in-place] [-p DIR | --package DIR]... [--no-local-project] [-h | --help] [-v | --version] <script>
 ```
 
 When `-o` / `--output` is provided for Markdown files, the result is written to that path. Otherwise it is printed to stdout. With `-i` / `--in-place` the notebook is rewritten in place: any previously rendered output is stripped and replaced, and re-running is idempotent (it does not accumulate blank lines). `-i` is only valid for `.md` / `.markdown` notebooks and cannot be combined with `-o`.
 
-The file extension determines the mode. `.ghci` / `hs` files are parsed and executed as a standalone GHCi script. `.md` / `.markdown` files are processed as a notebook with captured output. Run `scripths --help` for the full option and directive list.
+The file extension determines the mode. `.ghci` / `hs` files are parsed and executed as a standalone GHCi script. `.md` / `.markdown` files are processed as a notebook with captured output. Run `scripths --help` for the full option and directive list, or `scripths --version` to print the version.
+
+## Version tag
+
+Each file can carry a first-line tag recording the scripths version that authored it, so you can tell whether your binary is current enough to parse it. The spelling matches each file type's comment syntax:
+
+```
+-- scripths: 0.4.1.0          # .ghci / .hs scripts
+<!-- scripths: 0.4.1.0 -->    # .md / .markdown notebooks (invisible when rendered)
+```
+
+When scripths writes a notebook (`-o` / `--in-place`) it stamps or refreshes this tag at the top of the document; output streamed to stdout is left untouched. When you run a file whose tag declares a **newer** scripths than your binary, scripths warns on stderr and proceeds anyway (the syntax may not fully parse). The tag is recognised after a leading `#!` shebang (scripts) or YAML frontmatter block (notebooks).
 
 Requires GHC and cabal-install on your PATH.
 

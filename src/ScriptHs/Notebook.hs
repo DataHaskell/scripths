@@ -1,6 +1,7 @@
 module ScriptHs.Notebook where
 
 import Data.Bifunctor (Bifunctor (second))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
@@ -19,18 +20,28 @@ import ScriptHs.Parser (
     mergeMetas,
     parseScript,
  )
+import ScriptHs.Repl (scripthsIO, scrubInternalNames)
 import ScriptHs.Run (RunOptions, runScriptCapture)
+import ScriptHs.Version (TagStyle (NotebookTag), stampVersion)
 
 type IndexedSegments = [(Int, Segment)]
 type IndexedBlocks = [(Int, [Line])]
 
+{- | Run a notebook. Output streamed to stdout is left as-is so pipelines stay
+clean; output written to a file (@-o@ or @--in-place@) is stamped with the
+current scripths version tag at the top.
+-}
 runNotebook :: RunOptions -> FilePath -> Maybe FilePath -> IO ()
 runNotebook opts path outputPath = do
-    contents <- TIO.readFile path
+    contents <- stripBom <$> TIO.readFile path
     outputMd <- processNotebook opts path contents
     case outputPath of
         Nothing -> TIO.putStr outputMd
-        Just output -> TIO.writeFile output outputMd
+        Just output -> TIO.writeFile output (stampVersion NotebookTag outputMd)
+
+-- | Drop a leading UTF-8 BOM so it never sits in front of the version tag.
+stripBom :: Text -> Text
+stripBom t = fromMaybe t (T.stripPrefix "\65279" t)
 
 processNotebook :: RunOptions -> FilePath -> Text -> IO Text
 processNotebook opts notebookPath contents = do
@@ -51,9 +62,21 @@ executeCodeCells opts notebookPath meta allSegments codeBlocks = do
     let ghciScript = generatedMarkedScript codeBlocks
         sf = ScriptFile{scriptMeta = meta, scriptLines = ghciScript}
     rawOutput <- runScriptCapture opts notebookPath sf
-    let outputs = splitByMarkers rawOutput (map fst codeBlocks)
+    let indices = map fst codeBlocks
+        outputs = map (fmap (scrubCellOutput indices)) (splitByMarkers rawOutput indices)
         blocksWithOutput = addOutputToSegments outputs allSegments
     pure $ reassemble blocksWithOutput
+
+{- | Clean a cell's captured output before it is rendered into the document:
+strip scripths' internal identifiers (so a diagnostic reads like vanilla GHCi)
+and remove any cell-end block marker that survived 'splitByMarkers' (so it can
+never appear interleaved with the cell's stdout/error).
+-}
+scrubCellOutput :: [Int] -> Text -> Text
+scrubCellOutput indices =
+    scrubInternalNames . stripMarkers
+  where
+    stripMarkers t = foldr (\i acc -> T.replace (mkMarker i) "" acc) t indices
 
 addOutputToSegments :: [(Int, Text)] -> IndexedSegments -> [Segment]
 addOutputToSegments outputs = map addOutput
@@ -79,9 +102,17 @@ generatedMarkedScript = concatMap renderWithMarker
     renderWithMarker (idx, ls) =
         ls
             ++ [ Blank
-               , HaskellLine ("putStrLn " <> T.pack (show (T.unpack (mkMarker idx))))
+               , HaskellLine (markerStatement (mkMarker idx))
                , Blank
                ]
+
+{- | A GHCi statement printing a cell-end marker. @putStrLn@ is qualified through
+the synthetic @System.IO@ alias ('scripthsIO') so the marker still prints under a
+notebook that enables @NoImplicitPrelude@ or imports a custom prelude.
+-}
+markerStatement :: Text -> Text
+markerStatement marker =
+    scripthsIO <> ".putStrLn " <> T.pack (show (T.unpack marker))
 
 splitByMarkers :: Text -> [Int] -> [(Int, Text)]
 splitByMarkers _ [] = []

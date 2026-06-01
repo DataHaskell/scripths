@@ -58,6 +58,19 @@ parseTests =
                 case scriptLines sf of
                     [Pragma t] -> assertBool "pragma" (T.isPrefixOf "{-#" t)
                     other -> assertFailure $ "expected Pragma, got: " ++ show other
+            , testCase "a leading -- scripths: version tag is dropped, not treated as code" $ do
+                let sf = parseScript "-- scripths: 0.4.1.0\nimport Data.Text (Text)\n"
+                case scriptLines sf of
+                    [Import _] -> pure ()
+                    other -> assertFailure $ "expected the tag dropped, got: " ++ show other
+            , testCase "a -- scripths: comment in the body is kept, not silently dropped" $ do
+                let sf = parseScript "x = 1\n-- scripths: just a note\ny = 2\n"
+                    kept = any (lineHasText "-- scripths: just a note") (scriptLines sf)
+                assertBool "mid-body comment retained" kept
+            , testCase "a leading -- scripths:mime line is not a tag (kept)" $ do
+                let sf = parseScript "-- scripths:mime text/plain\nimport Data.Text (Text)\n"
+                    kept = any (lineHasText "-- scripths:mime text/plain") (scriptLines sf)
+                assertBool "mime line retained" kept
             , testCase "haskell line" $ do
                 let sf = parseScript "print (5 + 5)\n"
                 case scriptLines sf of
@@ -225,3 +238,12 @@ parseTests =
 notBlank :: Line -> Bool
 notBlank Blank = False
 notBlank _ = True
+
+-- | Does a parsed line carry text containing the needle?
+lineHasText :: T.Text -> Line -> Bool
+lineHasText s ln = case ln of
+    HaskellLine t -> s `T.isInfixOf` t
+    GhciCommand t -> s `T.isInfixOf` t
+    Pragma t -> s `T.isInfixOf` t
+    Import t -> s `T.isInfixOf` t
+    Blank -> False

@@ -1,8 +1,24 @@
 {-# LANGUAGE NamedFieldPuns #-}
 
-module ScriptHs.Run where
+{- | Assembling and running the throwaway cabal project scripths drives for a
+script or notebook. The GHCi code injected into that project's repl lives in
+"ScriptHs.Repl".
+-}
+module ScriptHs.Run (
+    RunOptions (..),
+    defaultRunOptions,
+    runScript,
+    runScriptCapture,
 
-import Control.Monad (filterM, unless, when)
+    -- * Internals exposed for testing
+    cabalArgs,
+    deriveProjectName,
+    renderCabalFile,
+    renderCabalProject,
+    usesTemplateHaskell,
+) where
+
+import Control.Monad (filterM, when)
 import Data.Char (isAlphaNum)
 import Data.List (intercalate, nub)
 import Data.Maybe (listToMaybe)
@@ -15,6 +31,14 @@ import ScriptHs.Parser (
     SourceRepoPin (..),
  )
 import ScriptHs.Render (toGhciScript)
+import ScriptHs.Repl (
+    autoPrintDirective,
+    cdDirective,
+    compileCdSetup,
+    compileCdTo,
+    replEvalExpr,
+    scrubInternalNames,
+ )
 import System.Directory (
     createDirectoryIfMissing,
     doesFileExist,
@@ -70,6 +94,30 @@ runWithCont cont opts scriptPath sf = do
         ensureProject opts userCwd scriptAbsPath (scriptMeta sf) (scriptLines sf)
     cont userCwd projectDir (projectDir </> "script.ghci")
 
+{- | Source for the throwaway executable's @Main.hs@. It only needs to typecheck
+(the repl never runs it), and is written prelude-agnostically so it compiles even
+when the notebook enables @NoImplicitPrelude@ for the executable.
+-}
+syntheticMainHs :: T.Text
+syntheticMainHs =
+    T.unlines
+        [ "import qualified System.IO"
+        , "import qualified Control.Applicative"
+        , "main :: System.IO.IO ()"
+        , "main = Control.Applicative.pure ()"
+        ]
+
+{- | Write @content@ to @path@ only when it differs from what's already there, so
+a stable file (the synthetic @Main.hs@) is not rewritten — and so recompiled — on
+every run, while a stale one from an older scripths is healed. Reads strictly
+(via "Data.Text.IO") so the handle is closed before the rewrite.
+-}
+writeFileIfChanged :: FilePath -> T.Text -> IO ()
+writeFileIfChanged path content = do
+    exists <- doesFileExist path
+    existing <- if exists then TIO.readFile path else pure ""
+    when (existing /= content) (TIO.writeFile path content)
+
 -- | Warn (once each) about unrecognised @-- cabal:@ directive keys.
 warnUnknownKeys :: [T.Text] -> IO ()
 warnUnknownKeys keys =
@@ -118,8 +166,7 @@ ensureProject opts userCwd scriptAbsPath meta scriptCode = do
     let th = usesTemplateHaskell meta scriptCode
         extraDeps = localNames ++ ["template-haskell" | th]
     let mainHsPath = projectDir </> "Main.hs"
-    mainHsExists <- doesFileExist mainHsPath
-    unless mainHsExists $ writeFile mainHsPath "main :: IO ()\nmain = pure ()\n"
+    writeFileIfChanged mainHsPath syntheticMainHs
     writeFile
         (projectDir </> (name ++ ".cabal"))
         (renderCabalFile name extraDeps meta)
@@ -135,41 +182,6 @@ ensureProject opts userCwd scriptAbsPath meta scriptCode = do
         (autoPrintDirective <> cdDirective userCwd <> body)
     pure projectDir
 
-{- | Make GHCi auto-print a trailing 'String' result /raw/ (via 'putStr')
-instead of @show@-escaping it into a quoted one-line literal. This lets a
-notebook cell end in @df |> toMarkdown'@ and have the markdown actually render,
-with no explicit 'putStrLn'. Every non-'String' result still prints via @show@,
-so tuples, @Either@, dataframes, etc. are unaffected.
--}
-autoPrintDirective :: T.Text
-autoPrintDirective =
-    T.unlines
-        [ ":set -XFlexibleInstances -XUndecidableInstances"
-        , "class ScripthsAutoPrint a where scripthsAutoPrint :: a -> IO ()"
-        , "instance {-# OVERLAPPING #-} ScripthsAutoPrint String where scripthsAutoPrint = putStr"
-        , "instance {-# OVERLAPPABLE #-} Show a => ScripthsAutoPrint a where scripthsAutoPrint = print"
-        , ":set -interactive-print scripthsAutoPrint"
-        ]
-
-{- | A GHCi preamble that changes the /process/ working directory to the dir
-@scripths@ was invoked from, so a script can read @./data/foo.csv@ relative to
-the user's working tree (the throwaway project lives under @~\/.scripths@).
-
-We use @System.Directory.setCurrentDirectory@ rather than GHCi's @:cd@: @:cd@
-unloads every loaded module (which breaks the @cabal repl@ session), whereas a
-plain IO action does not. @show@ renders a correctly escaped Haskell string
-literal, so paths containing spaces or quotes are safe. @directory@ is added to
-the synthetic package's dependencies (see 'renderCabalFile') so the import
-always resolves.
--}
-cdDirective :: FilePath -> T.Text
-cdDirective dir =
-    T.pack $
-        unlines
-            [ "import qualified System.Directory as ScripthsInternalDir"
-            , "ScripthsInternalDir.setCurrentDirectory " <> show dir
-            ]
-
 {- | Does this notebook use Template Haskell (a @TemplateHaskell@ ext/pragma, a
 @template-haskell@ dep, or a @$(…)@ splice line)? If so its splices read files at
 compile time, so we bracket the body with compile-time chdirs ('compileCdTo').
@@ -184,30 +196,6 @@ usesTemplateHaskell meta ls =
         let s = T.stripStart t in "$(" `T.isPrefixOf` s || "_ = ();" `T.isPrefixOf` s
     isSpliceLine (Pragma t) = "TemplateHaskell" `T.isInfixOf` t
     isSpliceLine _ = False
-
-{- | Enable @TemplateHaskell@ and bring TH's @runIO@ into scope for the
-compile-time chdir splices. Emitted only when 'usesTemplateHaskell'.
--}
-compileCdSetup :: T.Text
-compileCdSetup =
-    T.unlines
-        [ ":set -XTemplateHaskell"
-        , "import qualified Language.Haskell.TH.Syntax as ScripthsInternalTH"
-        ]
-
-{- | A GHCi top-level auto-splice (type @Q [Dec]@) running @setCurrentDirectory@
-at compile time, moving the process the /later/ splices compile in. Used pointed
-at the user's cwd before the blocks and back at the project dir after them.
--}
-compileCdTo :: FilePath -> T.Text
-compileCdTo dir =
-    T.unlines
-        [ ":{"
-        , "_ = (); ScripthsInternalTH.runIO (ScripthsInternalDir.setCurrentDirectory "
-            <> T.pack (show dir)
-            <> ") Prelude.>> Prelude.pure []"
-        , ":}"
-        ]
 
 {- | First line of a scripths-generated @cabal.project@. We regenerate only
 files that carry it (or the legacy @packages: .@ default), never hand-edited ones.
@@ -345,7 +333,7 @@ cabalArgs projectDir ghciPath =
     , "--project-dir=" ++ projectDir
     , "--repl-option=-ghci-script=" ++ ghciPath
     , "--repl-option=-e"
-    , "--repl-option=return()"
+    , "--repl-option=" ++ T.unpack replEvalExpr
     ]
 
 {- | Run the repl, capturing stdout and stderr as one /ordered/ stream so a
@@ -368,9 +356,15 @@ captureGhc userCwd projectDir ghciPath = do
     case code of
         ExitSuccess -> pure out
         ExitFailure _ -> do
-            TIO.hPutStr stderr out
+            TIO.hPutStr stderr (scrubInternalNames out)
             exitWith code
 
+{- | Run the repl with stdout\/stderr inherited (live, interactive, @Ctrl-C@ via
+@delegate_ctlc@). Used for @.ghci@\/@.hs@ scripts. Unlike 'captureGhc' this
+stream is /not/ passed through 'scrubInternalNames' — scrubbing a live stream
+would mean buffering it, defeating live output — so a failing script can still
+surface a scripths-internal name. The notebook path ('captureGhc') is scrubbed.
+-}
 runGhc :: FilePath -> FilePath -> FilePath -> IO ()
 runGhc userCwd projectDir ghciPath = do
     let args = "-v0" : cabalArgs projectDir ghciPath
