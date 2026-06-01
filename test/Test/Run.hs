@@ -1,6 +1,6 @@
 module Test.Run (runTests) where
 
-import Data.List (isPrefixOf)
+import Data.List (isInfixOf, isPrefixOf)
 import qualified Data.Text as T
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase, (@?=))
@@ -62,13 +62,29 @@ runTests =
             ]
         , testGroup
             "deriveProjectName"
-            [ testCase "sanitizes non-alphanumerics to dashes" $
-                deriveProjectName "/a/b/probe.md" @?= "a-b-probe-md"
+            [ testCase "sanitises to a readable stem, then a -h<hash> suffix" $ do
+                let n = deriveProjectName "/a/b/probe.md"
+                assertBool "readable stem" ("a-b-probe-md-h" `isPrefixOf` n)
+                assertBool "no double dash" (not ("--" `isInfixOf` n))
             , testCase "collapses runs and trims so a leading _ is valid" $
                 -- '/' then '_' would yield '--' (an empty cabal name component).
-                deriveProjectName "/x/_probe.md" @?= "x-probe-md"
-            , testCase "strips trailing separators" $
-                deriveProjectName "/x/note." @?= "x-note"
+                assertBool "stem" ("x-probe-md-h" `isPrefixOf` deriveProjectName "/x/_probe.md")
+            , testCase "distinct paths that sanitise alike do NOT collide" $
+                -- foo.md and foo-md both sanitise to home-u-foo-md; the hash keeps
+                -- them in separate ~/.scripths dirs.
+                assertBool "differ" $
+                    deriveProjectName "/home/u/foo.md" /= deriveProjectName "/home/u/foo-md"
+            , testCase "is stable for the same path" $
+                deriveProjectName "/home/u/x.md" @?= deriveProjectName "/home/u/x.md"
+            , testCase "non-ASCII letters become dashes (cabal needs ASCII names)" $ do
+                let n = deriveProjectName "/проект/данные.md"
+                assertBool
+                    "ASCII only"
+                    (all (\c -> c == '-' || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) n)
+            , testCase "an all-symbol path still yields a valid name" $
+                assertBool
+                    "fallback stem"
+                    ("scripths-script-h" `isPrefixOf` deriveProjectName "/---")
             ]
         , testGroup
             "renderCabalFile"

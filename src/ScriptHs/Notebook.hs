@@ -1,10 +1,15 @@
 module ScriptHs.Notebook where
 
 import Data.Bifunctor (Bifunctor (second))
+import Data.Bits (xor)
+import Data.Char (ord)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import Data.Word (Word32)
+import Numeric (showHex)
+import System.CPUTime (getCPUTime)
 
 import ScriptHs.Markdown (
     CodeOutput (..),
@@ -20,6 +25,7 @@ import ScriptHs.Parser (
     mergeMetas,
     parseScript,
  )
+import ScriptHs.Render (lineText)
 import ScriptHs.Repl (scripthsIO, scrubInternalNames)
 import ScriptHs.Run (RunOptions, runScriptCapture)
 import ScriptHs.Version (TagStyle (NotebookTag), stampVersion)
@@ -59,24 +65,43 @@ executeCodeCells ::
     IndexedBlocks ->
     IO Text
 executeCodeCells opts notebookPath meta allSegments codeBlocks = do
-    let ghciScript = generatedMarkedScript codeBlocks
+    let ghciScript0 = generatedMarkedScript "" codeBlocks
+    nonce <- makeNonce ghciScript0
+    let ghciScript = generatedMarkedScript nonce codeBlocks
         sf = ScriptFile{scriptMeta = meta, scriptLines = ghciScript}
     rawOutput <- runScriptCapture opts notebookPath sf
     let indices = map fst codeBlocks
-        outputs = map (fmap (scrubCellOutput indices)) (splitByMarkers rawOutput indices)
+        outputs =
+            map
+                (fmap (scrubCellOutput nonce indices))
+                (splitByMarkers nonce rawOutput indices)
         blocksWithOutput = addOutputToSegments outputs allSegments
     pure $ reassemble blocksWithOutput
+
+{- | A per-run hex nonce woven into every cell-end marker so a cell's own output
+cannot spoof a marker and misattribute another cell's output. Mixes the process
+CPU time with a hash of the cell text.
+-}
+makeNonce :: [Line] -> IO Text
+makeNonce ls = do
+    t <- getCPUTime
+    -- TODO: mchavinda - if this is slow then drop the text hashing and just use time.
+    let seed = T.pack (show t) <> T.concat (map lineText ls)
+    pure (T.pack (showHex (fnv1a seed) ""))
+
+fnv1a :: Text -> Word32
+fnv1a = T.foldl' (\h c -> (h `xor` fromIntegral (ord c)) * 16777619) 2166136261
 
 {- | Clean a cell's captured output before it is rendered into the document:
 strip scripths' internal identifiers (so a diagnostic reads like vanilla GHCi)
 and remove any cell-end block marker that survived 'splitByMarkers' (so it can
 never appear interleaved with the cell's stdout/error).
 -}
-scrubCellOutput :: [Int] -> Text -> Text
-scrubCellOutput indices =
+scrubCellOutput :: Text -> [Int] -> Text -> Text
+scrubCellOutput nonce indices =
     scrubInternalNames . stripMarkers
   where
-    stripMarkers t = foldr (\i acc -> T.replace (mkMarker i) "" acc) t indices
+    stripMarkers t = foldr (\i acc -> T.replace (mkMarker nonce i) "" acc) t indices
 
 addOutputToSegments :: [(Int, Text)] -> IndexedSegments -> [Segment]
 addOutputToSegments outputs = map addOutput
@@ -95,14 +120,14 @@ parseBlocks blocks = (metas, map (second scriptLines) sfs)
         [(i, parseScript code) | (i, CodeBlock lang code _) <- blocks, isHaskell lang]
     metas = mergeMetas (map (scriptMeta . snd) sfs)
 
-generatedMarkedScript :: IndexedBlocks -> [Line]
-generatedMarkedScript = concatMap renderWithMarker
+generatedMarkedScript :: Text -> IndexedBlocks -> [Line]
+generatedMarkedScript nonce = concatMap renderWithMarker
   where
     renderWithMarker :: (Int, [Line]) -> [Line]
     renderWithMarker (idx, ls) =
         ls
             ++ [ Blank
-               , HaskellLine (markerStatement (mkMarker idx))
+               , HaskellLine (markerStatement (mkMarker nonce idx))
                , Blank
                ]
 
@@ -114,20 +139,24 @@ markerStatement :: Text -> Text
 markerStatement marker =
     scripthsIO <> ".putStrLn " <> T.pack (show (T.unpack marker))
 
-splitByMarkers :: Text -> [Int] -> [(Int, Text)]
-splitByMarkers _ [] = []
-splitByMarkers remaining (idx : rest) =
-    let marker = mkMarker idx
+splitByMarkers :: Text -> Text -> [Int] -> [(Int, Text)]
+splitByMarkers _ _ [] = []
+splitByMarkers nonce remaining (idx : rest) =
+    let marker = mkMarker nonce idx
         (before, after) = T.breakOn marker remaining
      in if T.null after
             then [(idx, T.strip before)]
             else
-                (idx, T.strip before) : splitByMarkers (T.drop (T.length marker) after) rest
+                (idx, T.strip before)
+                    : splitByMarkers nonce (T.drop (T.length marker) after) rest
 
--- A marker we'll print to GHCi output to
--- denote the end of a cell execution block.
-mkMarker :: Int -> Text
-mkMarker n = "---SCRIPTHS_BLOCK_" <> T.pack (show n) <> "_END---"
+{- | The marker printed to GHCi output to denote the end of a cell's execution.
+Carries a per-run @nonce@ (see 'makeNonce') so a cell's own output cannot forge
+a marker and steal the boundary between cells.
+-}
+mkMarker :: Text -> Int -> Text
+mkMarker nonce n =
+    "---SCRIPTHS_BLOCK_" <> nonce <> "_" <> T.pack (show n) <> "_END---"
 
 isHaskell :: Text -> Bool
 isHaskell lang = fenceLanguage lang `elem` ["haskell", "hs"]

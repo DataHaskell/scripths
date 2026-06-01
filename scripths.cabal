@@ -66,7 +66,8 @@ test-suite scripths-test
                       Test.Notebook,
                       Test.Repl,
                       Test.Run,
-                      Test.Version
+                      Test.Version,
+                      Test.Integration
     build-depends:
         base >= 4 && < 5,
         scripths,

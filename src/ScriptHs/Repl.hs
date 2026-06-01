@@ -34,31 +34,50 @@ import qualified Data.Text as T
 scripthsIO :: T.Text
 scripthsIO = "ScripthsInternalIO"
 
+{- | Each @ScripthsInternal*@ alias scripths injects, paired with the real base
+module it stands for. Single source of truth shared by the generators above and
+'scrubInternalNames' so they cannot drift.
+-}
+scripthsInternalAliases :: [(T.Text, T.Text)]
+scripthsInternalAliases =
+    [ (scripthsIO, "System.IO")
+    , ("ScripthsInternalShow", "Text.Show")
+    , ("ScripthsInternalStr", "Data.String")
+    , ("ScripthsInternalMonad", "Control.Monad")
+    , ("ScripthsInternalApplicative", "Control.Applicative")
+    , ("ScripthsInternalTH", "Language.Haskell.TH.Syntax")
+    , ("ScripthsInternalDir", "System.Directory")
+    ]
+
 -- | The qualified module aliases scripths injects into the GHCi session.
 scripthsInternalQualifiers :: [T.Text]
-scripthsInternalQualifiers =
-    [ scripthsIO
-    , "ScripthsInternalShow"
-    , "ScripthsInternalStr"
-    , "ScripthsInternalMonad"
-    , "ScripthsInternalApplicative"
-    , "ScripthsInternalTH"
-    , "ScripthsInternalDir"
-    ]
+scripthsInternalQualifiers = map fst scripthsInternalAliases
 
 {- | Strip scripths' internal identifiers from captured GHCi output so a user's
 diagnostic reads like a vanilla GHCi one rather than exposing the synthetic
-preamble: a qualified alias loses its qualifier (@ScripthsInternalStr.IsString@
--> @IsString@) and the auto-print method becomes @print@ (exactly what GHCi
-prints without scripths). These tokens are deliberately exotic, so a blind
-'T.replace' over user-visible output will not collide with real content.
+preamble:
+
+  * a /qualified/ use loses its qualifier (@ScripthsInternalStr.IsString@ -> @IsString@);
+  * a /bare/ alias (e.g. @Could not load module \'ScripthsInternalDir\'@) becomes
+    the real module it stands for (@System.Directory@);
+  * the auto-print method @scripthsAutoPrint@ becomes @print@ and its class
+    @ScripthsAutoPrint@ becomes @Show@ (what GHCi shows without scripths).
+
+These tokens are deliberately exotic, so a blind 'T.replace' over user-visible
+output is very unlikely to collide with real content (a cell that literally
+prints one of them as data would be rewritten — an accepted trade-off).
 -}
 scrubInternalNames :: T.Text -> T.Text
-scrubInternalNames t = foldl (\acc (n, r) -> T.replace n r acc) t replacements
+scrubInternalNames t0 = foldl (\acc (n, r) -> T.replace n r acc) t0 replacements
   where
+    -- Order matters: strip qualified @Alias.@ uses first, then the method and
+    -- class names, then map any /remaining/ bare alias to its real module.
     replacements =
-        ("scripthsAutoPrint", "print")
-            : [(q <> ".", "") | q <- scripthsInternalQualifiers]
+        [(a <> ".", "") | (a, _) <- scripthsInternalAliases]
+            ++ [ ("scripthsAutoPrint", "print")
+               , ("ScripthsAutoPrint", "Show")
+               ]
+            ++ [(a, m) | (a, m) <- scripthsInternalAliases]
 
 {- | Make GHCi auto-print a trailing 'String' result /raw/ (via 'putStr')
 instead of @show@-escaping it into a quoted one-line literal. This lets a

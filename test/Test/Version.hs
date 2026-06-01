@@ -37,6 +37,8 @@ tagStyleForTests =
             tagStyleFor "x.md" @?= NotebookTag
             tagStyleFor "x.markdown" @?= NotebookTag
             tagStyleFor "X.MD" @?= NotebookTag
+            tagStyleFor "x.MARKDOWN" @?= NotebookTag
+            tagStyleFor "x.Md" @?= NotebookTag
         , testCase "ghci/hs/other => ScriptTag" $ do
             tagStyleFor "x.ghci" @?= ScriptTag
             tagStyleFor "x.hs" @?= ScriptTag
@@ -58,11 +60,11 @@ parseTagLineTests =
     testGroup
         "parseTagLine"
         [ testCase "script tag" $
-            parseTagLine ScriptTag "-- scripths: 0.4.1.0"
-                @?= Just (makeVersion [0, 4, 0, 1])
+            parseTagLine ScriptTag "-- scripths: 1.2.3.4"
+                @?= Just (makeVersion [1, 2, 3, 4])
         , testCase "notebook tag" $
-            parseTagLine NotebookTag "<!-- scripths: 0.4.1.0 -->"
-                @?= Just (makeVersion [0, 4, 0, 1])
+            parseTagLine NotebookTag "<!-- scripths: 1.2.3.4 -->"
+                @?= Just (makeVersion [1, 2, 3, 4])
         , testCase "tolerates trailing CRLF and whitespace" $ do
             parseTagLine NotebookTag "<!-- scripths: 1.2.3 -->\r"
                 @?= Just (makeVersion [1, 2, 3])
@@ -79,6 +81,21 @@ parseTagLineTests =
         , testCase "ordinary lines are not tags" $ do
             parseTagLine ScriptTag "import Data.Text" @?= Nothing
             parseTagLine NotebookTag "# Title" @?= Nothing
+        , testCase "an over-long component clamps instead of silently overflowing Int" $ do
+            let huge = parseTagLine NotebookTag "<!-- scripths: 99999999999999999999999999.0 -->"
+            assertBool "still parses" (huge /= Nothing)
+            assertBool "stays larger than a normal version (no wrap)" $
+                maybe False (> makeVersion [1, 0]) huge
+        , testCase "leading zeros in a component are tolerated" $
+            parseTagLine ScriptTag "-- scripths: 01.2" @?= Just (makeVersion [1, 2])
+        , testCase "trailing non-numeric junk after the version is ignored" $
+            parseTagLine ScriptTag "-- scripths: 1.2.3-beta"
+                @?= Just (makeVersion [1, 2, 3])
+        , testCase "empty/edge components are rejected" $ do
+            parseTagLine ScriptTag "-- scripths: 1..2" @?= Nothing
+            parseTagLine ScriptTag "-- scripths: .1" @?= Nothing
+            parseTagLine ScriptTag "-- scripths: 1." @?= Nothing
+            parseTagLine ScriptTag "-- scripths: " @?= Nothing
         ]
 
 tagVersionTests :: TestTree
@@ -98,6 +115,9 @@ tagVersionTests =
                 @?= Just (makeVersion [2, 0])
         , testCase "no tag => Nothing" $
             tagVersion NotebookTag "# Title\n\nprose\n" @?= Nothing
+        , testCase "unterminated '---' (no closing fence) is not frontmatter" $
+            -- First non-blank line is '---' (a thematic break), so there is no tag.
+            tagVersion NotebookTag "---\ntitle: x\n# Body\n" @?= Nothing
         ]
 
 stampVersionTests :: TestTree
@@ -133,6 +153,39 @@ stampVersionTests =
         , testCase "frontmatter stamping is idempotent" $ do
             let once = stampVersion NotebookTag "---\ntitle: x\n---\n# Body\n"
             stampVersion NotebookTag once @?= once
+        , testCase "a leading Markdown thematic break is not treated as frontmatter" $ do
+            -- Regression: a `---` rule is NOT YAML, so the tag must go ABOVE it,
+            -- never spliced into the body (the in-place data-corruption trap).
+            let src = "---\nIntro prose under a rule.\n\nSection.\n\n---\n\nMore.\n"
+                out = stampVersion NotebookTag src
+            tagVersion NotebookTag out @?= Just scripthsVersion
+            assertBool "body intact" ("Intro prose under a rule." `T.isInfixOf` out)
+            assertBool "single tag" (T.count "<!-- scripths:" out == 1)
+            assertBool "tag is above the first rule" $
+                maybe
+                    False
+                    (T.isInfixOf "---")
+                    (T.stripPrefix (versionTag NotebookTag <> "\n") out)
+        , testCase "thematic-break stamping is idempotent (no creeping corruption)" $ do
+            let src = "---\nIntro prose under a rule.\n\n---\n\nMore.\n"
+                once = stampVersion NotebookTag src
+            stampVersion NotebookTag once @?= once
+        , testCase "a file that is only '---' is a rule, not frontmatter: tag goes above" $ do
+            let out = stampVersion NotebookTag "---\n"
+            tagVersion NotebookTag out @?= Just scripthsVersion
+            assertBool "rule kept" ("---" `T.isInfixOf` out)
+            assertBool "tag above the rule" $
+                maybe
+                    False
+                    (T.isInfixOf "---")
+                    (T.stripPrefix (versionTag NotebookTag <> "\n") out)
+        , testCase "unterminated frontmatter is not spliced into (tag goes to the top)" $ do
+            let out = stampVersion NotebookTag "---\ntitle: x\n# Body\n"
+            tagVersion NotebookTag out @?= Just scripthsVersion
+            assertBool "body intact" ("# Body" `T.isInfixOf` out)
+            assertBool "single tag" (T.count "<!-- scripths:" out == 1)
+            assertBool "tag is the first line" $
+                maybe False (const True) (T.stripPrefix (versionTag NotebookTag) out)
         ]
   where
     -- Text after the second "---" line, where the tag must live.

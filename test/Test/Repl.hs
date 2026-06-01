@@ -6,6 +6,7 @@ import Test.Tasty.HUnit (assertBool, testCase, (@?=))
 
 import ScriptHs.Repl (
     autoPrintDirective,
+    cdDirective,
     compileCdSetup,
     compileCdTo,
     replEvalExpr,
@@ -18,8 +19,24 @@ replTests =
     testGroup
         "Repl"
         [ compileCdToTests
+        , cdDirectiveTests
         , preludeAgnosticTests
         , scrubTests
+        ]
+
+cdDirectiveTests :: TestTree
+cdDirectiveTests =
+    testGroup
+        "cdDirective"
+        [ testCase "runtime chdir via qualified System.Directory, show-escaped path" $ do
+            let txt = cdDirective "/data/my project"
+            assertBool "imports Directory qualified" $
+                T.isInfixOf "import qualified System.Directory as ScripthsInternalDir" txt
+            assertBool "calls setCurrentDirectory" $
+                T.isInfixOf "ScripthsInternalDir.setCurrentDirectory" txt
+            assertBool "path is show-escaped (quoted)" $
+                T.isInfixOf "\"/data/my project\"" txt
+            assertBool "no bare Prelude" (not (T.isInfixOf "Prelude" txt))
         ]
 
 compileCdToTests :: TestTree
@@ -70,6 +87,14 @@ preludeAgnosticTests =
             assertBool "no Prelude" (not (T.isInfixOf "Prelude" replEvalExpr))
             assertBool "no return" (not (T.isInfixOf "return" replEvalExpr))
             assertBool "no spaces" (not (T.isInfixOf " " replEvalExpr))
+        , testCase "the full injected preamble names no Prelude dependency" $ do
+            -- The whole script.ghci prefix, assembled, must not mention Prelude.
+            let injected =
+                    autoPrintDirective
+                        <> cdDirective "/some/dir"
+                        <> compileCdSetup
+                        <> compileCdTo "/some/dir"
+            assertBool "no Prelude anywhere" (not (T.isInfixOf "Prelude" injected))
         ]
 
 scrubTests :: TestTree
@@ -92,7 +117,36 @@ scrubTests =
             assertBool
                 "no ScripthsInternal remains"
                 (not (T.isInfixOf "ScripthsInternal" (scrubInternalNames sample)))
+        , testCase "rewrites the ScripthsAutoPrint class to Show" $ do
+            -- The common non-Showable-cell error is `No instance for (ScripthsAutoPrint …)`.
+            let s =
+                    scrubInternalNames
+                        "No instance for (ScripthsAutoPrint Foo) arising from a use of scripthsAutoPrint"
+            assertBool "class gone" (not (T.isInfixOf "ScripthsAutoPrint" s))
+            assertBool "reads as Show" (T.isInfixOf "No instance for (Show Foo)" s)
+        , testCase "a bare alias (no trailing dot) becomes its real module" $
+            scrubInternalNames "Could not load module 'ScripthsInternalDir'"
+                @?= "Could not load module 'System.Directory'"
         , testCase "leaves ordinary output untouched" $
             scrubInternalNames "Variable not in scope: frobnicate"
                 @?= "Variable not in scope: frobnicate"
+        , testCase "preserves multibyte Unicode while scrubbing (guards the UTF-8 path)" $ do
+            -- GHC diagnostics carry Unicode (curly quotes, the • bullet); scrubbing an
+            -- internal name beside them must not mangle the surrounding text.
+            let s =
+                    scrubInternalNames
+                        "Variable not in scope: \8216caf\233\8217 \8226 ScripthsInternalDir.x"
+            assertBool "keeps the curly-quoted café" (T.isInfixOf "\8216caf\233\8217" s)
+            assertBool "keeps the bullet" (T.isInfixOf "\8226" s)
+            assertBool "still scrubbed" (not (T.isInfixOf "ScripthsInternal" s))
+        , testCase "scrubbing is idempotent (scrub . scrub == scrub)" $ do
+            let sample =
+                    T.unwords
+                        [ "ScripthsInternalStr.IsString"
+                        , "bare ScripthsInternalDir"
+                        , "scripthsAutoPrint"
+                        , "ScripthsAutoPrint"
+                        ]
+                once = scrubInternalNames sample
+            scrubInternalNames once @?= once
         ]

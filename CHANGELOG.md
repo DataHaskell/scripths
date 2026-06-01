@@ -5,6 +5,10 @@
 * **Custom-prelude support**: auto print (our hook to rout evething but strings to shw)
   now doesn't assume a prelude.
 * **Cleaner error rendering** (notebooks): don't leak internals when printing errors.
+* **UTF-8 output**: captured notebook output is decoded as UTF-8.
+* **Friendlier errors**: a missing input file reports `No such file or directory`
+  instead of a raw exception; a failing `.ghci` script's stderr is scrubbed too;
+  cell-end markers carry a per-run nonce so cell output can't spoof a boundary.
 * **Version tag**: files may carry a first-line tag recording the scripths that
   wrote them — `-- scripths: X` in `.ghci`/`.hs` scripts, `<!-- scripths: X -->`
   in `.md`/`.markdown` notebooks. Running a file that declares a *newer* scripths

@@ -71,6 +71,18 @@ parseTests =
                 let sf = parseScript "-- scripths:mime text/plain\nimport Data.Text (Text)\n"
                     kept = any (lineHasText "-- scripths:mime text/plain") (scriptLines sf)
                 assertBool "mime line retained" kept
+            , testCase "leading tag then a -- cabal: line: tag dropped, dep still parsed" $ do
+                let sf = parseScript "-- scripths: 1.2.3\n-- cabal: build-depends: text\nimport X\n"
+                (metaDeps . scriptMeta) sf @?= ["text"]
+                scriptLines sf @?= [Import "import X"]
+            , testCase
+                "a tag AFTER a shebang is not dropped (only the first non-blank is checked)"
+                $ do
+                    -- Pins current behaviour: dropLeadingVersionTag inspects the first
+                    -- non-blank line (the shebang), so the tag survives as a comment line.
+                    let sf = parseScript "#!/usr/bin/env scripths\n-- scripths: 1.2.3\nimport X\n"
+                    assertBool "tag line retained" $
+                        any (lineHasText "-- scripths: 1.2.3") (scriptLines sf)
             , testCase "haskell line" $ do
                 let sf = parseScript "print (5 + 5)\n"
                 case scriptLines sf of

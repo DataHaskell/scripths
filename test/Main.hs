@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
 
+import Test.Integration (integrationTests)
 import Test.Markdown (markdownTests)
 import Test.Notebook (notebookTests)
 import Test.Parser (parseTests)
@@ -22,4 +23,5 @@ main =
             , replTests
             , runTests
             , versionTests
+            , integrationTests
             ]

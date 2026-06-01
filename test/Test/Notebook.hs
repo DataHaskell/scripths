@@ -23,6 +23,10 @@ import ScriptHs.Notebook (
 import ScriptHs.Parser (CabalMeta (metaDeps), Line (..))
 import ScriptHs.Run (defaultRunOptions)
 
+-- | A fixed nonce for marker tests (the real one is per-run; see 'makeNonce').
+tn :: T.Text
+tn = "TESTNONCE"
+
 notebookTests :: TestTree
 notebookTests =
     testGroup
@@ -65,32 +69,34 @@ notebookTests =
             ]
         , testGroup
             "mkMarker"
-            [ testCase "format includes index" $ do
-                mkMarker 0 @?= "---SCRIPTHS_BLOCK_0_END---"
-                mkMarker 12 @?= "---SCRIPTHS_BLOCK_12_END---"
+            [ testCase "format includes nonce and index" $ do
+                mkMarker tn 0 @?= "---SCRIPTHS_BLOCK_" <> tn <> "_0_END---"
+                mkMarker tn 12 @?= "---SCRIPTHS_BLOCK_" <> tn <> "_12_END---"
+            , testCase "different nonces give different markers (anti-spoofing)" $
+                assertBool "differ" (mkMarker "aaaa" 0 /= mkMarker "bbbb" 0)
             ]
         , testGroup
             "splitByMarkers"
             [ testCase "empty marker list => []" $ do
-                splitByMarkers "anything" [] @?= []
+                splitByMarkers tn "anything" [] @?= []
             , testCase "marker not found => strip remaining as output for that idx" $ do
                 let out = "  hello world  \n"
-                splitByMarkers out [0] @?= [(0, "hello world")]
+                splitByMarkers tn out [0] @?= [(0, "hello world")]
             , testCase "single marker splits before it" $ do
-                let out = T.unlines ["42", mkMarker 0, "ignored trailing"]
-                splitByMarkers out [0] @?= [(0, "42")]
+                let out = T.unlines ["42", mkMarker tn 0, "ignored trailing"]
+                splitByMarkers tn out [0] @?= [(0, "42")]
             , testCase "multiple markers split sequentially" $ do
                 let out =
                         T.concat
                             [ "cell0\n"
-                            , mkMarker 0
+                            , mkMarker tn 0
                             , "\ncell1\n"
-                            , mkMarker 1
+                            , mkMarker tn 1
                             , "\ncell2\n"
-                            , mkMarker 2
+                            , mkMarker tn 2
                             , "\n"
                             ]
-                splitByMarkers out [0, 1, 2]
+                splitByMarkers tn out [0, 1, 2]
                     @?= [ (0, "cell0")
                         , (1, "cell1")
                         , (2, "cell2")
@@ -99,13 +105,17 @@ notebookTests =
                 let out =
                         T.concat
                             [ "cell0\n"
-                            , mkMarker 0
+                            , mkMarker tn 0
                             , "\ncell1-no-marker-at-end\n"
                             ]
-                splitByMarkers out [0, 1]
+                splitByMarkers tn out [0, 1]
                     @?= [ (0, "cell0")
                         , (1, "cell1-no-marker-at-end")
                         ]
+            , testCase "output spoofing a DIFFERENT nonce's marker is not split on" $ do
+                -- A cell printing a marker with the wrong nonce can't steal a boundary.
+                let out = "real" <> mkMarker "OTHER" 0 <> "data\n" <> mkMarker tn 0
+                splitByMarkers tn out [0] @?= [(0, "real" <> mkMarker "OTHER" 0 <> "data")]
             ]
         , testGroup
             "mkIndexedCodeSegments"
@@ -166,13 +176,13 @@ notebookTests =
                         [ (10, [HaskellLine "print 10"])
                         , (11, [HaskellLine "print 11"])
                         ]
-                let ls = generatedMarkedScript blocks
+                let ls = generatedMarkedScript tn blocks
 
                 assertBool "has first line" (HaskellLine "print 10" `elem` ls)
                 assertBool "has second line" (HaskellLine "print 11" `elem` ls)
 
-                let m10 = mkMarker 10
-                    m11 = mkMarker 11
+                let m10 = mkMarker tn 10
+                    m11 = mkMarker tn 11
 
                 assertBool
                     "has marker statement 10"
@@ -240,13 +250,19 @@ notebookTests =
         , testGroup
             "scrubCellOutput"
             [ testCase "removes a block marker that survived splitting" $ do
-                let out = "line one\n" <> mkMarker 1 <> "\nline two"
-                    scrubbed = scrubCellOutput [0, 1, 2] out
+                let out = "line one\n" <> mkMarker tn 1 <> "\nline two"
+                    scrubbed = scrubCellOutput tn [0, 1, 2] out
                 assertBool "no marker leaks" (not (T.isInfixOf "SCRIPTHS_BLOCK" scrubbed))
                 assertBool "keeps the stdout" (T.isInfixOf "line one" scrubbed)
             , testCase "scrubs scripths internal identifiers from a cell error" $ do
                 let scrubbed =
-                        scrubCellOutput [0] "No instance for Show .. use of scripthsAutoPrint"
+                        scrubCellOutput tn [0] "No instance for Show .. use of scripthsAutoPrint"
                 assertBool "no autoprint name" (not (T.isInfixOf "scripthsAutoPrint" scrubbed))
+            , testCase "strips markers for every listed index" $ do
+                let out = "a" <> mkMarker tn 0 <> "b" <> mkMarker tn 2 <> "c"
+                scrubCellOutput tn [0, 1, 2] out @?= "abc"
+            , testCase "a marker whose index is NOT a real cell is left intact" $ do
+                let out = "real data: " <> mkMarker tn 5
+                scrubCellOutput tn [0] out @?= out
             ]
         ]

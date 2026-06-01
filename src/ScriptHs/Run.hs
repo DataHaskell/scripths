@@ -19,11 +19,14 @@ module ScriptHs.Run (
 ) where
 
 import Control.Monad (filterM, when)
-import Data.Char (isAlphaNum)
-import Data.List (intercalate, nub)
+import Data.Bits (xor)
+import Data.Char (isAlphaNum, isAscii, ord)
+import Data.List (foldl', intercalate, nub)
 import Data.Maybe (listToMaybe)
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import Data.Word (Word32)
+import Numeric (showHex)
 import ScriptHs.Parser (
     CabalMeta (..),
     Line (..),
@@ -49,7 +52,7 @@ import System.Directory (
  )
 import System.Exit (ExitCode (..), exitWith)
 import System.FilePath (takeDirectory, takeExtension, (</>))
-import System.IO (stderr)
+import System.IO (hSetEncoding, stderr, utf8)
 import System.Process (
     CreateProcess (cwd, delegate_ctlc, std_err, std_out),
     StdStream (UseHandle),
@@ -125,18 +128,35 @@ warnUnknownKeys keys =
         (\k -> TIO.hPutStrLn stderr ("scripths: warning: unknown '-- cabal:' key: " <> k))
         (nub keys)
 
-{- | Turn a script path into a valid cabal package name: non-alphanumerics become
-@-@, runs of @-@ collapse to one, and leading/trailing @-@ are stripped (so a name
-like @_probe.md@ does not yield an internal @--@, which cabal rejects).
+{- | Turn an /absolute/ script path into a valid, collision-free cabal package
+name (also used as the @~\/.scripths@ subdir). Only ASCII alphanumerics survive —
+other characters (incl. non-ASCII letters cabal would reject) become @-@, runs of
+@-@ collapse, and leading\/trailing @-@ are stripped. A readable stem alone would
+collide (@foo.md@ and @foo-md@ both sanitise to @foo-md@) and could be empty, so
+a stable hash of the full path is appended after an @-h@ marker — distinct paths
+never share a project dir, and the trailing component always begins with a letter
+(a valid cabal name).
 -}
 deriveProjectName :: FilePath -> String
-deriveProjectName =
-    trimDash . collapseDashes . map (\c -> if isAlphaNum c then c else '-')
+deriveProjectName path = stem ++ "-h" ++ pathHash path
   where
+    sanitised = trimDash (collapseDashes (map asciiAlnumOrDash path))
+    stem = if null sanitised then "scripths-script" else sanitised
+    asciiAlnumOrDash c = if isAscii c && isAlphaNum c then c else '-'
     collapseDashes ('-' : xs) = '-' : collapseDashes (dropWhile (== '-') xs)
     collapseDashes (x : xs) = x : collapseDashes xs
     collapseDashes [] = []
     trimDash = f . f where f = reverse . dropWhile (== '-')
+
+{- | A short, stable hex hash of a string (FNV-1a over 'Word32'); used to keep
+distinct script paths from colliding on the same @~\/.scripths@ project dir
+without pulling in a hashing dependency.
+-}
+pathHash :: String -> String
+pathHash s = showHex (foldl' step 2166136261 s) ""
+  where
+    step :: Word32 -> Char -> Word32
+    step h c = (h `xor` fromIntegral (ord c)) * 16777619
 
 ensureProject ::
     RunOptions -> FilePath -> FilePath -> CabalMeta -> [Line] -> IO FilePath
@@ -344,6 +364,9 @@ captureGhc :: FilePath -> FilePath -> FilePath -> IO T.Text
 captureGhc userCwd projectDir ghciPath = do
     let args = "-v0" : cabalArgs projectDir ghciPath
     (readEnd, writeEnd) <- createPipe
+    -- GHC writes UTF-8 (cell output and the Unicode punctuation in its
+    -- diagnostics); decode the pipe as UTF-8 so it is not mangled into mojibake.
+    hSetEncoding readEnd utf8
     (_, _, _, ph) <-
         createProcess
             (proc "cabal" args)
@@ -359,18 +382,28 @@ captureGhc userCwd projectDir ghciPath = do
             TIO.hPutStr stderr (scrubInternalNames out)
             exitWith code
 
-{- | Run the repl with stdout\/stderr inherited (live, interactive, @Ctrl-C@ via
-@delegate_ctlc@). Used for @.ghci@\/@.hs@ scripts. Unlike 'captureGhc' this
-stream is /not/ passed through 'scrubInternalNames' — scrubbing a live stream
-would mean buffering it, defeating live output — so a failing script can still
-surface a scripths-internal name. The notebook path ('captureGhc') is scrubbed.
+{- | Run the repl for @.ghci@\/@.hs@ scripts: stdout is inherited so it streams
+live (and @Ctrl-C@ works via @delegate_ctlc@), while stderr is captured, decoded
+as UTF-8, and passed through 'scrubInternalNames' before being forwarded — so a
+failing script no longer leaks scripths-internal names in its diagnostics. (We
+read stderr to EOF as we go, so the pipe never fills; the trade-off is that
+stderr is flushed after the run rather than perfectly interleaved with stdout.)
 -}
 runGhc :: FilePath -> FilePath -> FilePath -> IO ()
 runGhc userCwd projectDir ghciPath = do
     let args = "-v0" : cabalArgs projectDir ghciPath
-        cp = (proc "cabal" args){cwd = Just userCwd, delegate_ctlc = True}
+    (errRead, errWrite) <- createPipe
+    hSetEncoding errRead utf8
+    let cp =
+            (proc "cabal" args)
+                { cwd = Just userCwd
+                , delegate_ctlc = True
+                , std_err = UseHandle errWrite
+                }
     (_, _, _, ph) <- createProcess cp
+    errOut <- TIO.hGetContents errRead
     code <- waitForProcess ph
+    TIO.hPutStr stderr (scrubInternalNames errOut)
     case code of
         ExitSuccess -> pure ()
         ExitFailure _ -> exitWith code

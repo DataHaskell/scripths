@@ -7,6 +7,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import System.Directory (
     doesDirectoryExist,
+    doesFileExist,
     listDirectory,
     makeAbsolute,
  )
@@ -50,6 +51,8 @@ main = do
             | otherwise -> case argScript a of
                 Nothing -> usage
                 Just path -> do
+                    exists <- doesFileExist path
+                    unless exists $ die (path ++ ": No such file or directory")
                     warnIfNewer path
                     outPath <- resolveOutput a path
                     pkgs <- mapM resolvePackageDir (argPackages a)

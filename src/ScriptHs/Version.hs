@@ -28,7 +28,7 @@ module ScriptHs.Version (
     newerVersionWarning,
 ) where
 
-import Data.Char (isDigit, isSpace)
+import Data.Char (isAlphaNum, isDigit, isSpace)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -100,16 +100,24 @@ requireLeadingSpace t = case T.uncons t of
     Just (c, _) | isSpace c -> Just (T.stripStart t)
     _ -> Nothing
 
--- | Parse a leading dotted-decimal version (e.g. @0.4.1.0@), ignoring trailing text.
+{- | Parse a leading dotted-decimal version (e.g. @0.4.1.0@), ignoring trailing
+text. Components are parsed as 'Integer' and clamped to 'maxBound' so an absurdly
+long number cannot silently overflow 'Int' (which could otherwise wrap to a small
+value and defeat the newer-than-binary check) — a too-big component stays "newer".
+-}
 parseVersionToken :: Text -> Maybe Version
 parseVersionToken t =
     case T.splitOn "." token of
         parts@(_ : _)
             | not (any T.null parts) ->
-                makeVersion <$> traverse (readMaybe . T.unpack) parts
+                makeVersion . map clampToInt <$> traverse parseComponent parts
         _ -> Nothing
   where
     token = T.takeWhile (\c -> c == '.' || isDigit c) (T.stripStart t)
+    parseComponent :: Text -> Maybe Integer
+    parseComponent = readMaybe . T.unpack
+    clampToInt :: Integer -> Int
+    clampToInt = fromInteger . min (toInteger (maxBound :: Int))
 
 {- | The scripths version a file declares, if any. Scans a small top-of-file
 window: skip a leading @#!@ shebang (scripts) or a leading @---@ YAML
@@ -126,19 +134,32 @@ tagVersion style contents =
 {- | Split off a leading preamble that the tag sits /after/: a @#!@ shebang for
 scripts, or a @---@…@---@ YAML frontmatter block for notebooks. Returns
 @(preamble, rest)@.
+
+A leading @---@ is treated as frontmatter only when the fenced block actually
+looks like YAML (it closes with @---@ and contains at least one @key:@ line).
+Otherwise the @---@ is an ordinary Markdown /thematic break/ and is left in the
+body — so 'stampVersion' inserts the tag /above/ it rather than corrupting the
+document by splicing into the middle (the @-i@ data-loss trap).
 -}
 splitPreamble :: TagStyle -> [Text] -> ([Text], [Text])
 splitPreamble ScriptTag ls@(l : rest)
     | "#!" `T.isPrefixOf` T.stripStart l = ([l], rest)
     | otherwise = ([], ls)
 splitPreamble NotebookTag ls@(l : rest)
-    | T.strip l == "---" =
-        let (block, after) = break ((== "---") . T.strip) rest
-         in case after of
-                (closing : afterClosing) -> (l : block ++ [closing], afterClosing)
-                [] -> ([], ls)
+    | T.strip l == "---"
+    , (block, closing : afterClosing) <- break ((== "---") . T.strip) rest
+    , any looksLikeYamlKey block =
+        (l : block ++ [closing], afterClosing)
     | otherwise = ([], ls)
 splitPreamble _ [] = ([], [])
+
+{- | Does a line look like a YAML mapping entry (@key:@)? Used to tell a real
+frontmatter block from a Markdown thematic break delimited by @---@.
+-}
+looksLikeYamlKey :: Text -> Bool
+looksLikeYamlKey line =
+    let (key, afterKey) = T.span (\c -> isAlphaNum c || c == '_' || c == '-') (T.stripStart line)
+     in not (T.null key) && ":" `T.isPrefixOf` afterKey
 
 {- | Ensure @contents@ carries the current version tag at the top of its body:
 replace an existing tag line in place, or insert one after any shebang\/
