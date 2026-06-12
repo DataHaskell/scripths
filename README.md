@@ -7,6 +7,7 @@ GHCi scripts for standalone execution and Markdown documentation.
 ## Features
 
 - **Standalone `.ghci` execution** — Run GHCi scripts directly from the command line, with automatic dependency.
+- **Compiled or intepreted** - you can either compile or interpret cells. Heavier functions can be compiled so they move fast and interactive parts can be kept interpreted.
 - **Cabal metadata directives** — Declare `build-depends`, `default-extensions`, `ghc-options`, and local `packages` inline using `-- cabal:` comments.
 - **Markdown notebooks** — Execute Haskell code blocks inside Markdown files and render the output back into the document as block quotes. Re-run in place with `-i` — output is replaced cleanly, with no accumulating blank lines.
 - **Inline errors** — A block that fails to compile renders its GHC error beneath the block instead of producing silent empty output.

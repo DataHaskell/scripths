@@ -68,7 +68,7 @@ executeCodeCells opts notebookPath meta allSegments codeBlocks = do
     let ghciScript0 = generatedMarkedScript "" codeBlocks
     nonce <- makeNonce ghciScript0
     let ghciScript = generatedMarkedScript nonce codeBlocks
-        sf = ScriptFile{scriptMeta = meta, scriptLines = ghciScript}
+        sf = ScriptFile{scriptMeta = meta, scriptCompile = Nothing, scriptLines = ghciScript}
     rawOutput <- runScriptCapture opts notebookPath sf
     let indices = map fst codeBlocks
         outputs =

@@ -18,9 +18,11 @@ M.fromList (zip [1..10] [2,4..])
 module ScriptHs.Parser (
     ScriptFile (..),
     CabalMeta (..),
+    CompileDirective (..),
     SourceRepoPin (..),
     Line (..),
     parseScript,
+    parseScriptNumbered,
     mergeMetas,
 ) where
 
@@ -36,9 +38,20 @@ ordered list of code lines.
 data ScriptFile = ScriptFile
     { scriptMeta :: CabalMeta
     -- ^ Aggregated metadata from all @-- cabal:@ directives in the script.
+    , scriptCompile :: Maybe CompileDirective
+    -- ^ The first @-- compile@ directive in the script, if any.
     , scriptLines :: [Line]
     -- ^ The code lines of the script, in order, with metadata lines removed.
     }
+    deriving (Show, Eq)
+
+{- | A @-- compile@ directive marking a script (notebook cell) as compiled:
+its declarations are destined for a generated module rather than the GHCi
+prompt. @-- compile: Some.Module@ names the target module explicitly.
+-}
+data CompileDirective
+    = CompileDefault
+    | CompileNamed Text
     deriving (Show, Eq)
 
 {- | Cabal metadata extracted from @-- cabal:@ directives.
@@ -118,12 +131,30 @@ ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcO
 ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = []}
 -}
 parseScript :: Text -> ScriptFile
-parseScript input =
-    let textLines = dropLeadingVersionTag (T.lines input)
-        parsedLines = map parseLine textLines
-        (metas, code) = partitionLines parsedLines
-        meta = mergeMetas metas
-     in ScriptFile{scriptMeta = meta, scriptLines = code}
+parseScript = fst . parseScriptNumbered
+
+{- | Like 'parseScript', but also returns the code lines paired with their
+1-based line numbers in the original input (directive lines are removed from
+the stream but the numbering of the survivors is preserved). Used to emit
+@{\-# LINE #-\}@ pragmas that point back at the original source.
+-}
+parseScriptNumbered :: Text -> (ScriptFile, [(Int, Line)])
+parseScriptNumbered input =
+    let numberedRaw = zip [1 ..] (T.lines input)
+        afterTag = dropLeadingVersionTag numberedRaw
+        parsed = [(i, parseLine t) | (i, t) <- afterTag]
+        metas = [m | (_, RawCabalMeta m) <- parsed]
+        compileDir = case [d | (_, RawCompile d) <- parsed] of
+            (d : _) -> Just d
+            [] -> Nothing
+        code = [(i, c) | (i, RawCode c) <- parsed]
+        sf =
+            ScriptFile
+                { scriptMeta = mergeMetas metas
+                , scriptCompile = compileDir
+                , scriptLines = map snd code
+                }
+     in (sf, code)
 
 {- | Drop a leading scripths version tag (the first non-blank line, when it is
 one) so it is not emitted into the repl. Recognised via the single parser in
@@ -131,22 +162,17 @@ one) so it is not emitted into the repl. Recognised via the single parser in
 is left untouched, and the recognizer cannot drift from the one used to read the
 tag.
 -}
-dropLeadingVersionTag :: [Text] -> [Text]
-dropLeadingVersionTag ls = case span isBlank ls of
-    (blanks, tag : rest) | isJust (parseTagLine ScriptTag tag) -> blanks ++ rest
+dropLeadingVersionTag :: [(Int, Text)] -> [(Int, Text)]
+dropLeadingVersionTag ls = case span (isBlank . snd) ls of
+    (blanks, (_, tag) : rest) | isJust (parseTagLine ScriptTag tag) -> blanks ++ rest
     _ -> ls
   where
     isBlank = T.null . T.strip
 
 data RawLine
     = RawCabalMeta CabalMeta
+    | RawCompile CompileDirective
     | RawCode Line
-
-partitionLines :: [RawLine] -> ([CabalMeta], [Line])
-partitionLines = foldr go ([], [])
-  where
-    go (RawCabalMeta m) (ms, cs) = (m : ms, cs)
-    go (RawCode c) (ms, cs) = (ms, c : cs)
 
 mergeMetas :: [CabalMeta] -> CabalMeta
 mergeMetas ms =
@@ -162,7 +188,21 @@ mergeMetas ms =
 parseLine :: Text -> RawLine
 parseLine line
     | Just meta <- parseCabalMeta line = RawCabalMeta meta
+    | Just dir <- parseCompileDirective line = RawCompile dir
     | otherwise = RawCode (parseCodeLine line)
+
+{- | Recognize a @-- compile@ \/ @-- compile: Some.Module@ directive line.
+A comment merely starting with the word (e.g. @-- compiled fast@) is not a
+directive; the name is taken verbatim (validation happens downstream).
+-}
+parseCompileDirective :: Text -> Maybe CompileDirective
+parseCompileDirective line = do
+    rest <- T.stripPrefix "--" (T.stripStart line)
+    after <- T.stripPrefix "compile" (T.stripStart rest)
+    let a = T.strip after
+    if T.null a
+        then Just CompileDefault
+        else CompileNamed . T.strip <$> T.stripPrefix ":" a
 
 parseCabalMeta :: Text -> Maybe CabalMeta
 parseCabalMeta line = do

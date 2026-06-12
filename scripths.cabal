@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               scripths
-version:            0.4.1.0
+version:            0.5.0.0
 synopsis:           GHCi scripts for standalone execution and Markdown documentation.
 description:        GHCi scripts for standalone execution (with dependency resolution) and Markdown documentation (produces inline output).
 homepage:           https://www.datahaskell.org/
@@ -24,6 +24,7 @@ common warnings
 library
     import:           warnings
     exposed-modules:  ScriptHs.Parser,
+                      ScriptHs.Compiled,
                       ScriptHs.Render,
                       ScriptHs.Markdown,
                       ScriptHs.Notebook,
@@ -61,6 +62,7 @@ test-suite scripths-test
     hs-source-dirs:   test
     main-is:          Main.hs
     other-modules:    Test.Parser,
+                      Test.Compiled,
                       Test.Render,
                       Test.Markdown,
                       Test.Notebook,

@@ -2,6 +2,7 @@ module Main (main) where
 
 import Test.Tasty (defaultMain, testGroup)
 
+import Test.Compiled (compiledTests)
 import Test.Integration (integrationTests)
 import Test.Markdown (markdownTests)
 import Test.Notebook (notebookTests)
@@ -17,6 +18,7 @@ main =
         testGroup
             "ScriptHs"
             [ parseTests
+            , compiledTests
             , renderTests
             , markdownTests
             , notebookTests

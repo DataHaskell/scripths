@@ -30,6 +30,7 @@ module ScriptHs.Render (
     toPieces,
     classify,
     lineText,
+    unRewriteSplice,
 ) where
 
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
