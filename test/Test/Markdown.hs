@@ -10,13 +10,7 @@ import Test.Tasty.HUnit (
 
 import Data.Text (Text)
 import qualified Data.Text as T
-import ScriptHs.Markdown (
-    CodeOutput (..),
-    MimeType (..),
-    Segment (CodeBlock, Prose),
-    parseMarkdown,
-    reassemble,
- )
+import ScriptHs.Markdown
 
 markdownTests :: TestTree
 markdownTests =
@@ -105,7 +99,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [CodeBlock _ _ (Just (CodeOutput m _)), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
+                    [CodeBlock _ _ (Just (CodeOutput _ m _)), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "svg mimetype" $ do
                 let input =
@@ -122,7 +116,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [CodeBlock _ _ (Just (CodeOutput m _)), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
+                    [CodeBlock _ _ (Just (CodeOutput _ m _)), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "multiple code blocks" $ do
                 let input =
@@ -152,7 +146,7 @@ markdownTests =
                 length outputBlocks @?= 2
                 assertBool
                     "all mimeType plain"
-                    (all (== MimePlain) [m | (Just (CodeOutput m _)) <- outputBlocks])
+                    (all (== MimePlain) [m | (Just (CodeOutput _ m _)) <- outputBlocks])
             , testCase "non-haskell code block preserved" $ do
                 let input =
                         T.unlines
@@ -197,32 +191,50 @@ markdownTests =
         , testGroup
             "reassemble"
             [ testCase "prose without output" $ do
-                let result = reassemble [Prose "Hello\n"]
+                let result = reassemble defaultCodeStyle [Prose "Hello\n"]
                 result @?= "Hello\n"
             , testCase "code block without output" $ do
-                let result = reassemble [CodeBlock "haskell" "print 42\n" Nothing]
+                let result = reassemble defaultCodeStyle [CodeBlock "haskell" "print 42\n" Nothing]
                 assertBool "has fence" (T.isInfixOf "```haskell" result)
                 assertBool "has code" (T.isInfixOf "print 42" result)
                 assertBool "no blockquote" (not $ T.isInfixOf "> " result)
             , testCase "code block with output" $ do
                 let result =
-                        reassemble [CodeBlock "haskell" "print 42\n" (Just $ CodeOutput MimePlain "42")]
+                        reassemble
+                            defaultCodeStyle
+                            [ CodeBlock
+                                "haskell"
+                                "print 42\n"
+                                (Just $ CodeOutput defaultOutputStyle MimePlain "42")
+                            ]
                 assertBool "has fence" (T.isInfixOf "```haskell" result)
                 assertBool "has code" (T.isInfixOf "print 42" result)
                 assertBool "has blockquote" (T.isInfixOf "> 42" result)
             , testCase "code block with multi-line output" $ do
                 let result =
-                        reassemble [CodeBlock "hs" "print [1,2]\n" (Just $ CodeOutput MimePlain "1\n2")]
+                        reassemble
+                            defaultCodeStyle
+                            [ CodeBlock
+                                "hs"
+                                "print [1,2]\n"
+                                (Just $ CodeOutput defaultOutputStyle MimePlain "1\n2")
+                            ]
                 assertBool "has > 1" (T.isInfixOf "> 1" result)
                 assertBool "has > 2" (T.isInfixOf "> 2" result)
             , testCase "full document roundtrip" $ do
                 let segs =
                         [ Prose "# Title\n\n"
-                        , CodeBlock "haskell" "print 42\n" (Just $ CodeOutput MimePlain "42")
+                        , CodeBlock
+                            "haskell"
+                            "print 42\n"
+                            (Just $ CodeOutput defaultOutputStyle MimePlain "42")
                         , Prose "\nSome text.\n"
-                        , CodeBlock "haskell" "print 99\n" (Just $ CodeOutput MimePlain "99")
+                        , CodeBlock
+                            "haskell"
+                            "print 99\n"
+                            (Just $ CodeOutput defaultOutputStyle MimePlain "99")
                         ]
-                let result = reassemble segs
+                let result = reassemble defaultCodeStyle segs
 
                 assertBool "has title" (T.isInfixOf "# Title" result)
                 assertBool "has first output" (T.isInfixOf "> 42" result)
@@ -238,17 +250,38 @@ markdownTests =
                 assertBool "middle before code2" (middleIdx < code2Idx)
             ]
         , testGroup
-            "blockquote"
-            [ testCase "single line" $ do
-                let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "hello")]
-                assertBool "blockquoted" (T.isInfixOf "> hello" result)
-            , testCase "empty lines in output get bare >" $ do
-                let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "a\n\nb")]
-                assertBool "has bare >" (T.isInfixOf "\n> \n" result)
-            , testCase "renders the scripths:mime marker (not the legacy sabela)" $ do
-                let result = reassemble [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "y")]
-                assertBool "uses scripths:mime" (T.isInfixOf "scripths:mime" result)
-                assertBool "no sabela:mime" (not (T.isInfixOf "sabela:mime" result))
+            "Output style"
+            [ testGroup
+                "raw"
+                [ testCase "Raw output" $ do
+                    let result =
+                            reassemble
+                                defaultCodeStyle
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput OutputRaw MimePlain "hello")]
+                    assertBool "Not quoted" (T.isInfixOf "hello" result)
+                ]
+            , testGroup
+                "blockquote"
+                [ testCase "single line" $ do
+                    let result =
+                            reassemble
+                                defaultCodeStyle
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput defaultOutputStyle MimePlain "hello")]
+                    assertBool "blockquoted" (T.isInfixOf "> hello" result)
+                , testCase "empty lines in output get bare >" $ do
+                    let result =
+                            reassemble
+                                defaultCodeStyle
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput defaultOutputStyle MimePlain "a\n\nb")]
+                    assertBool "has bare >" (T.isInfixOf "\n> \n" result)
+                , testCase "renders the scripths:mime marker (not the legacy sabela)" $ do
+                    let result =
+                            reassemble
+                                defaultCodeStyle
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput defaultOutputStyle MimePlain "y")]
+                    assertBool "uses scripths:mime" (T.isInfixOf "scripths:mime" result)
+                    assertBool "no sabela:mime" (not (T.isInfixOf "sabela:mime" result))
+                ]
             ]
         , testGroup
             "idempotency (no extra blank lines on re-run)"
@@ -297,7 +330,7 @@ markdownTests =
         ]
 
 roundTrip :: Text -> Text
-roundTrip = reassemble . parseMarkdown
+roundTrip = reassemble defaultCodeStyle . parseMarkdown
 
 nlCount :: Text -> Int
 nlCount = T.length . T.filter (== '\n')

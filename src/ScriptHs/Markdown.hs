@@ -4,10 +4,45 @@ module ScriptHs.Markdown (
     reassemble,
     MimeType (..),
     CodeOutput (..),
+    CodeStyle (..),
+    parseCodeStyle,
+    defaultCodeStyle,
+    OutputStyle (..),
+    parseOutputStyle,
+    defaultOutputStyle,
 ) where
 
 import Data.Text (Text)
 import qualified Data.Text as T
+
+{- |  Directs how the original code fences are styled
+  in the processed output.
+-}
+data CodeStyle
+    = DisplayCode
+    | RemoveCode
+    deriving (Eq, Ord, Show)
+
+parseCodeStyle :: String -> Maybe CodeStyle
+parseCodeStyle "display" = Just DisplayCode
+parseCodeStyle "remove" = Just RemoveCode
+parseCodeStyle _ = Nothing
+
+defaultCodeStyle :: CodeStyle
+defaultCodeStyle = DisplayCode
+
+data OutputStyle
+    = OutputQuoted
+    | OutputRaw
+    deriving (Eq, Ord, Show)
+
+parseOutputStyle :: String -> Maybe OutputStyle
+parseOutputStyle "quoted" = Just OutputQuoted
+parseOutputStyle "raw" = Just OutputRaw
+parseOutputStyle _ = Nothing
+
+defaultOutputStyle :: OutputStyle
+defaultOutputStyle = OutputQuoted
 
 data MimeType
     = MimeHtml
@@ -19,7 +54,8 @@ data MimeType
     | MimePlain
     deriving (Show, Eq)
 
-data CodeOutput = CodeOutput MimeType Text deriving (Show, Eq)
+data CodeOutput = CodeOutput OutputStyle MimeType Text
+    deriving (Show, Eq)
 
 data Segment
     = Prose Text
@@ -48,7 +84,8 @@ parseMarkdown' acc (line : rest) = case fenceLang line of
                                 (cOutput, afterOutput) = span (T.isPrefixOf "> ") xs
                                 mType = mimeFromTag x
                              in
-                                ( Just (CodeOutput mType (T.unlines (map (T.drop (T.length "> ")) cOutput)))
+                                ( Just
+                                    (CodeOutput OutputQuoted mType (T.unlines (map (T.drop (T.length "> ")) cOutput)))
                                 , afterOutput
                                 )
                 [] -> (Nothing, rest')
@@ -91,8 +128,8 @@ fenceCodeSegment lang output
 seam between segments collapses to one blank line and the document's leading/
 trailing blanks are trimmed, so re-running (e.g. @--in-place@) adds no new lines.
 -}
-reassemble :: [Segment] -> Text
-reassemble = finalize . foldr (joinSeam . renderSegment) ""
+reassemble :: CodeStyle -> [Segment] -> Text
+reassemble codeStyle = finalize . foldr (joinSeam . renderSegment codeStyle) ""
   where
     joinSeam "" acc = acc
     joinSeam piece "" = piece
@@ -106,19 +143,26 @@ reassemble = finalize . foldr (joinSeam . renderSegment) ""
         let stripped = T.dropWhileEnd (== '\n') (T.dropWhile (== '\n') t)
          in if T.null stripped then "" else stripped <> "\n"
 
-renderSegment :: Segment -> Text
-renderSegment (Prose t) = t
-renderSegment (CodeBlock lang code Nothing) = fenceCodeSegment lang code
-renderSegment (CodeBlock lang code (Just output)) = fenceCodeSegment lang code <> blockQuote output
+renderSegment :: CodeStyle -> Segment -> Text
+renderSegment _ (Prose t) = t
+renderSegment _ (CodeBlock lang code Nothing) = fenceCodeSegment lang code
+renderSegment codeStyle (CodeBlock lang code (Just output)) =
+    let codeFence = case codeStyle of
+            DisplayCode -> fenceCodeSegment lang code
+            RemoveCode -> mempty
+     in codeFence <> blockQuote output
 
 blockQuote :: CodeOutput -> Text
-blockQuote (CodeOutput mimeType t) =
+blockQuote (CodeOutput outputStyle mimeType t) =
     let
         ls = (mimeMarker <> mimeIndicator mimeType <> " -->") : T.lines t
         trimmed = reverse $ dropWhile T.null $ reverse ls
-        quoted = T.unlines $ map (\l -> if T.null l then "> " else "> " <> l) trimmed
+        styling = case outputStyle of
+            OutputQuoted -> "> "
+            OutputRaw -> ""
+        output = T.unlines $ map (\l -> if T.null l then styling else styling <> l) trimmed
      in
-        quoted <> "\n"
+        output <> "\n"
 
 mimeIndicator :: MimeType -> Text
 mimeIndicator m = case m of

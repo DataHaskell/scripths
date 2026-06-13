@@ -5,7 +5,14 @@ import Test.Tasty.HUnit (assertBool, assertFailure, testCase, (@?=))
 
 import qualified Data.Text as T
 
-import ScriptHs.Markdown (CodeOutput (..), MimeType (..), Segment (..))
+import ScriptHs.Markdown (
+    CodeOutput (..),
+    CodeStyle (..),
+    MimeType (..),
+    Segment (..),
+    defaultCodeStyle,
+    defaultOutputStyle,
+ )
 import ScriptHs.Notebook (
     addOutputToSegments,
     generatedMarkedScript,
@@ -151,12 +158,12 @@ notebookTests =
                             , CodeBlock
                                 "hs"
                                 "print 3\n"
-                                (Just $ CodeOutput MimePlain "old-should-be-replaced")
+                                (Just $ CodeOutput defaultOutputStyle MimePlain "old-should-be-replaced")
                             )
                         , (4, Prose "outro\n")
                         ]
 
-                let result = addOutputToSegments outputs indexedSegs
+                let result = addOutputToSegments defaultOutputStyle outputs indexedSegs
 
                 length result @?= length indexedSegs
 
@@ -164,8 +171,15 @@ notebookTests =
                 result !! 4 @?= Prose "outro\n"
 
                 result !! 1
-                    @?= CodeBlock "haskell" "print 1\n" (Just $ CodeOutput MimePlain "out-1")
-                result !! 3 @?= CodeBlock "hs" "print 3\n" (Just $ CodeOutput MimePlain "out-3")
+                    @?= CodeBlock
+                        "haskell"
+                        "print 1\n"
+                        (Just $ CodeOutput defaultOutputStyle MimePlain "out-1")
+                result !! 3
+                    @?= CodeBlock
+                        "hs"
+                        "print 3\n"
+                        (Just $ CodeOutput defaultOutputStyle MimePlain "out-3")
 
                 result !! 2 @?= CodeBlock "python" "print('x')\n" Nothing
             ]
@@ -231,7 +245,8 @@ notebookTests =
             "processNotebook"
             [ testCase "no code blocks => returns input unchanged" $ do
                 let input = T.unlines ["# Title", "", "Just prose.", ""]
-                out <- processNotebook defaultRunOptions "" input
+                out <-
+                    processNotebook defaultOutputStyle defaultCodeStyle defaultRunOptions "" input
                 out @?= input
             , testCase "non-haskell code blocks only => returns input unchanged" $ do
                 let input =
@@ -244,7 +259,8 @@ notebookTests =
                             , ""
                             , "more prose"
                             ]
-                out <- processNotebook defaultRunOptions "" input
+                out <-
+                    processNotebook defaultOutputStyle defaultCodeStyle defaultRunOptions "" input
                 out @?= input
             ]
         , testGroup
@@ -264,5 +280,24 @@ notebookTests =
             , testCase "a marker whose index is NOT a real cell is left intact" $ do
                 let out = "real data: " <> mkMarker tn 5
                 scrubCellOutput tn [0] out @?= out
+            ]
+        , testGroup
+            "Code style"
+            [ testCase "Removed code in final output" $ do
+                let input =
+                        T.unlines
+                            [ "# Title"
+                            , "```haskell"
+                            , "1 + 1"
+                            , "```"
+                            ]
+                result <-
+                    processNotebook defaultOutputStyle RemoveCode defaultRunOptions "" input
+                result
+                    @?= T.unlines
+                        [ "# Title"
+                        , "> <!-- scripths:mime text/plain -->"
+                        , "> 2"
+                        ]
             ]
         ]
