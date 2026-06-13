@@ -1,5 +1,6 @@
 module Test.Run (runTests) where
 
+import Data.Char (isAsciiLower, isDigit)
 import Data.List (isInfixOf, isPrefixOf)
 import qualified Data.Text as T
 import Test.Tasty (TestTree, testGroup)
@@ -15,7 +16,7 @@ import ScriptHs.Run (
  )
 
 emptyMeta :: CabalMeta
-emptyMeta = CabalMeta [] [] [] [] [] []
+emptyMeta = CabalMeta [] [] [] [] [] [] [] []
 
 runTests :: TestTree
 runTests =
@@ -36,7 +37,7 @@ runTests =
                 $ do
                     let args = cabalArgs "/proj" "/proj/script.ghci"
                         eTerm = last (filter ("--repl-option=" `isPrefixOf`) args)
-                    assertBool "no space in terminator" (not (' ' `elem` eTerm))
+                    assertBool "no space in terminator" (' ' `notElem` eTerm)
             , testCase "includes --project-dir" $ do
                 let args = cabalArgs "/proj" "/proj/script.ghci"
                 assertBool "--project-dir present" $
@@ -45,20 +46,40 @@ runTests =
         , testGroup
             "renderCabalProject"
             [ testCase "base case has the managed sentinel and packages: ." $ do
-                let txt = renderCabalProject [] []
+                let txt = renderCabalProject [] [] [] []
                 assertBool "sentinel" (T.isInfixOf "managed by scripths" txt)
                 assertBool "packages ." (T.isInfixOf "packages: ." txt)
             , testCase "local package dirs appear as packages entries" $ do
-                let txt = renderCabalProject ["/abs/granite"] []
+                let txt = renderCabalProject ["/abs/granite"] [] [] []
                 assertBool "abs path" (T.isInfixOf "/abs/granite" txt)
             , testCase "git pin renders a source-repository-package stanza" $ do
                 let pin = SourceRepoPin "https://x/repo" "abc123" (Just "sub")
-                    txt = renderCabalProject [] [pin]
+                    txt = renderCabalProject [] [pin] [] []
                 assertBool "stanza" (T.isInfixOf "source-repository-package" txt)
                 assertBool "type" (T.isInfixOf "type: git" txt)
                 assertBool "location" (T.isInfixOf "location: https://x/repo" txt)
                 assertBool "tag" (T.isInfixOf "tag: abc123" txt)
                 assertBool "subdir" (T.isInfixOf "subdir: sub" txt)
+            , testCase "no package * stanza when no extra dirs are declared" $ do
+                let txt = renderCabalProject [] [] [] []
+                assertBool "no package *" (not (T.isInfixOf "package *" txt))
+            , testCase "extra dirs render a package * stanza (applies to deps)" $ do
+                let txt =
+                        renderCabalProject
+                            []
+                            []
+                            ["/opt/homebrew/opt/opencascade/lib"]
+                            ["/opt/homebrew/opt/opencascade/include/opencascade"]
+                assertBool "package * header" (T.isInfixOf "package *" txt)
+                assertBool
+                    "lib dir"
+                    (T.isInfixOf "    extra-lib-dirs: /opt/homebrew/opt/opencascade/lib" txt)
+                assertBool
+                    "inc dir"
+                    ( T.isInfixOf
+                        "    extra-include-dirs: /opt/homebrew/opt/opencascade/include/opencascade"
+                        txt
+                    )
             ]
         , testGroup
             "deriveProjectName"
@@ -80,7 +101,7 @@ runTests =
                 let n = deriveProjectName "/проект/данные.md"
                 assertBool
                     "ASCII only"
-                    (all (\c -> c == '-' || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) n)
+                    (all (\c -> c == '-' || isAsciiLower c || isDigit c) n)
             , testCase "an all-symbol path still yields a valid name" $
                 assertBool
                     "fallback stem"

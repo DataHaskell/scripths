@@ -72,6 +72,10 @@ data CabalMeta = CabalMeta
     -- ^ Extensions from @default-extensions@ directives.
     , metaGhcOptions :: [Text]
     -- ^ Flags from @ghc-options@ directives.
+    , metaExtraLibDirs :: [Text]
+    -- ^ Native library search paths from @extra-lib-dirs@ directives.
+    , metaExtraIncludeDirs :: [Text]
+    -- ^ C header search paths from @extra-include-dirs@ directives.
     , metaPackages :: [Text]
     {- ^ Extra local package dirs from @packages@ directives, resolved relative
     to the script file (lets a notebook depend on a second, non-enclosing local
@@ -125,10 +129,10 @@ failure.
 Example:
 
 >>> parseScript "-- cabal: build-depends: text\nimport Data.Text (Text)\n"
-ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcOptions = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = [Import "import Data.Text (Text)"]}
+ScriptFile {scriptMeta = CabalMeta {metaDeps = ["text"], metaExts = [], metaGhcOptions = [], metaExtraLibDirs = [], metaExtraIncludeDirs = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = [Import "import Data.Text (Text)"]}
 
 >>> parseScript ""
-ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = []}
+ScriptFile {scriptMeta = CabalMeta {metaDeps = [], metaExts = [], metaGhcOptions = [], metaExtraLibDirs = [], metaExtraIncludeDirs = [], metaPackages = [], metaSourceRepos = [], metaUnknownKeys = []}, scriptLines = []}
 -}
 parseScript :: Text -> ScriptFile
 parseScript = fst . parseScriptNumbered
@@ -180,6 +184,8 @@ mergeMetas ms =
         { metaDeps = concatMap metaDeps ms
         , metaExts = concatMap metaExts ms
         , metaGhcOptions = concatMap metaGhcOptions ms
+        , metaExtraLibDirs = concatMap metaExtraLibDirs ms
+        , metaExtraIncludeDirs = concatMap metaExtraIncludeDirs ms
         , metaPackages = concatMap metaPackages ms
         , metaSourceRepos = concatMap metaSourceRepos ms
         , metaUnknownKeys = concatMap metaUnknownKeys ms
@@ -216,6 +222,8 @@ parseCabalMeta line = do
                 "build-depends" -> emptyCabal{metaDeps = items}
                 "default-extensions" -> emptyCabal{metaExts = items}
                 "ghc-options" -> emptyCabal{metaGhcOptions = items}
+                "extra-lib-dirs" -> emptyCabal{metaExtraLibDirs = items}
+                "extra-include-dirs" -> emptyCabal{metaExtraIncludeDirs = items}
                 "packages" -> emptyCabal{metaPackages = items}
                 "source-repository-package" ->
                     emptyCabal{metaSourceRepos = maybeToList (parseSourceRepo value)}
@@ -227,6 +235,8 @@ parseCabalMeta line = do
             { metaDeps = []
             , metaExts = []
             , metaGhcOptions = []
+            , metaExtraLibDirs = []
+            , metaExtraIncludeDirs = []
             , metaPackages = []
             , metaSourceRepos = []
             , metaUnknownKeys = []

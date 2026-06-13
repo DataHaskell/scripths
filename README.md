@@ -130,6 +130,44 @@ The recognised keys are `build-depends`, `default-extensions`, `ghc-options`, `p
 
 `OverloadedStrings` is enabled in every scripths repl by default, so string literals work directly as `Text` / `ByteString`; add any further extensions with `default-extensions`.
 
+## The `-- compile` directive
+
+A notebook cell (or script) can be marked **compiled**:
+
+```
+-- compile
+```
+
+or, naming the generated module explicitly:
+
+```
+-- compile: Training.Core
+```
+
+The directive declares that the cell's contents are *module-level
+declarations* destined for a generated Haskell module rather than the GHCi
+prompt — a host environment (such as [Sabela](https://github.com/mchav/sabela))
+writes those declarations into a module, loads it with `:load` under
+`-fobject-code -O2`, and gets native compiled code instead of interpreted
+bytecode. Cells sharing a module name merge into one module; bare
+`-- compile` cells share a default module.
+
+What scripths provides:
+
+- `ScriptHs.Parser` recognises the directive (`scriptCompile` on
+  `ScriptFile`) and offers `parseScriptNumbered`, a line-number-preserving
+  parse.
+- `ScriptHs.Compiled` validates that a cell is declarations-only
+  (`checkCompilable`) and renders the generated module
+  (`renderCompiledModule`), preceding every unit with a
+  `{-# LINE n "sabela-cell-<id>" #-}` pragma so GHC diagnostics map back to
+  the originating cell and line (`linePragmaTag` / `parseLinePragmaTag`).
+
+Under the **scripths CLI** the directive is currently a graceful no-op: it
+parses as an ordinary comment and the cell runs interpreted, producing the
+same results (just slower). Standalone compiled execution in the CLI may
+come later.
+
 ## Local packages
 
 By default `build-depends` resolve from Hackage. To build a script or notebook

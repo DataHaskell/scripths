@@ -176,7 +176,12 @@ ensureProject opts userCwd scriptAbsPath meta scriptCode = do
     let localPkgs = nub (roPackages opts ++ metaPkgDirs ++ enclosing)
     writeManagedCabalProject
         (projectDir </> "cabal.project")
-        (renderCabalProject localPkgs (metaSourceRepos meta))
+        ( renderCabalProject
+            localPkgs
+            (metaSourceRepos meta)
+            (metaExtraLibDirs meta)
+            (metaExtraIncludeDirs meta)
+        )
     -- A local package only imports if its name is also a build-depend; collect
     -- the names so renderCabalFile can add them (and warn on dirs without one).
     localNames <- localPackageNames localPkgs
@@ -227,13 +232,29 @@ managedSentinel =
 {- | Render a @cabal.project@ from local package dirs + git source-repo pins.
 Always includes @.@ (the synthetic script package).
 -}
-renderCabalProject :: [FilePath] -> [SourceRepoPin] -> T.Text
-renderCabalProject localPkgs repos =
+
+{- | The @cabal.project@. @extra-lib-dirs@\/@extra-include-dirs@ from cell
+metadata go into a @package *@ stanza (not the executable's build-info), because
+build-info dirs are not applied when cabal configures a /dependency/ — a native
+library like OpenCASCADE is found only when its own package gets the search path.
+-}
+renderCabalProject ::
+    [FilePath] -> [SourceRepoPin] -> [T.Text] -> [T.Text] -> T.Text
+renderCabalProject localPkgs repos libDirs incDirs =
     T.unlines $
         [managedSentinel, "packages: ."]
             ++ map (\p -> "          " <> T.pack p) localPkgs
             ++ concatMap renderRepo repos
+            ++ packageStar
   where
+    packageStar
+        | null libDirs && null incDirs = []
+        | otherwise =
+            ["package *"]
+                ++ ["    extra-lib-dirs: " <> T.intercalate ", " libDirs | not (null libDirs)]
+                ++ [ "    extra-include-dirs: " <> T.intercalate ", " incDirs
+                   | not (null incDirs)
+                   ]
     renderRepo r =
         [ "source-repository-package"
         , "    type: git"

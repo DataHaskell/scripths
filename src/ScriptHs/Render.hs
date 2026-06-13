@@ -496,11 +496,15 @@ renderCabalScriptHeader meta =
         ["{- cabal:", "build-depends: " <> commaList (dedup ("base" : metaDeps meta))]
             ++ ["default-extensions: " <> commaList exts' | not (null exts')]
             ++ ["ghc-options: " <> T.unwords opts']
+            ++ ["extra-lib-dirs: " <> commaList libDirs | not (null libDirs)]
+            ++ ["extra-include-dirs: " <> commaList incDirs | not (null incDirs)]
             ++ map renderRepo (metaSourceRepos meta)
             ++ ["-}"]
   where
     exts' = dedup (metaExts meta)
     opts' = dedup (metaGhcOptions meta ++ ["-Wno-unused-imports"])
+    libDirs = dedup (metaExtraLibDirs meta)
+    incDirs = dedup (metaExtraIncludeDirs meta)
     commaList = T.intercalate ", "
     renderRepo r =
         T.unwords $

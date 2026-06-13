@@ -16,8 +16,8 @@ import ScriptHs.Compiled (
  )
 import ScriptHs.Parser (
     CompileDirective (..),
-    ScriptFile (scriptCompile, scriptLines),
     Line (..),
+    ScriptFile (scriptCompile, scriptLines),
     parseScript,
     parseScriptNumbered,
  )
@@ -132,7 +132,8 @@ renderTests =
     testGroup
         "renderCompiledModule"
         [ testCase "module header and decl with LINE pragma" $ do
-            let src = renderCompiledModule "Training" [] [] [chunk 7 "f :: Int -> Int\nf x = x + 1\n"]
+            let src =
+                    renderCompiledModule "Training" [] [] [chunk 7 "f :: Int -> Int\nf x = x + 1\n"]
             assertContains src "module Training where"
             assertContains src ("{-# LINE 1 \"" <> linePragmaTag 7 <> "\" #-}")
             assertContains src "f x = x + 1"

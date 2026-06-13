@@ -12,6 +12,8 @@ import qualified Data.Text as T
 import ScriptHs.Parser (
     CabalMeta (
         metaDeps,
+        metaExtraIncludeDirs,
+        metaExtraLibDirs,
         metaExts,
         metaGhcOptions,
         metaPackages,
@@ -114,6 +116,12 @@ parseTests =
             , testCase "packages directive lists extra local package dirs" $ do
                 let sf = parseScript "-- cabal: packages: ../th, ../persistent\n"
                 (metaPackages . scriptMeta) sf @?= ["../th", "../persistent"]
+            , testCase "extra-lib-dirs directive lists native library search paths" $ do
+                let sf = parseScript "-- cabal: extra-lib-dirs: /opt/homebrew/lib, /usr/local/lib\n"
+                (metaExtraLibDirs . scriptMeta) sf @?= ["/opt/homebrew/lib", "/usr/local/lib"]
+            , testCase "extra-include-dirs directive lists C header search paths" $ do
+                let sf = parseScript "-- cabal: extra-include-dirs: /opt/homebrew/include\n"
+                (metaExtraIncludeDirs . scriptMeta) sf @?= ["/opt/homebrew/include"]
             , testCase "metadata stripped from lines" $ do
                 let input =
                         T.unlines

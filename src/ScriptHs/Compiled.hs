@@ -25,7 +25,13 @@ import qualified Data.Text as T
 import qualified Data.Text.Read as TR
 
 import ScriptHs.Parser (Line (..))
-import ScriptHs.Render (Kind (..), Piece (..), lineText, toPieces, unRewriteSplice)
+import ScriptHs.Render (
+    Kind (..),
+    Piece (..),
+    lineText,
+    toPieces,
+    unRewriteSplice,
+ )
 
 -- | One cell's contribution to a generated module.
 data CellChunk = CellChunk

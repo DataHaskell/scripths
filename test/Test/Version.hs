@@ -1,5 +1,6 @@
 module Test.Version (versionTests) where
 
+import Data.Maybe (isJust)
 import qualified Data.Text as T
 import Data.Version (makeVersion)
 import Test.Tasty (TestTree, testGroup)
@@ -83,7 +84,7 @@ parseTagLineTests =
             parseTagLine NotebookTag "# Title" @?= Nothing
         , testCase "an over-long component clamps instead of silently overflowing Int" $ do
             let huge = parseTagLine NotebookTag "<!-- scripths: 99999999999999999999999999.0 -->"
-            assertBool "still parses" (huge /= Nothing)
+            assertBool "still parses" (isJust huge)
             assertBool "stays larger than a normal version (no wrap)" $
                 maybe False (> makeVersion [1, 0]) huge
         , testCase "leading zeros in a component are tolerated" $
@@ -185,7 +186,7 @@ stampVersionTests =
             assertBool "body intact" ("# Body" `T.isInfixOf` out)
             assertBool "single tag" (T.count "<!-- scripths:" out == 1)
             assertBool "tag is the first line" $
-                maybe False (const True) (T.stripPrefix (versionTag NotebookTag) out)
+                isJust (T.stripPrefix (versionTag NotebookTag) out)
         ]
   where
     -- Text after the second "---" line, where the tag must live.
@@ -200,7 +201,7 @@ newerVersionWarningTests =
         [ testCase "newer => warns" $
             assertBool
                 "warns"
-                (maybe False (const True) (newerVersionWarning (makeVersion [99, 0])))
+                (isJust (newerVersionWarning (makeVersion [99, 0])))
         , testCase "current => silent" $
             newerVersionWarning scripthsVersion @?= Nothing
         , testCase "older => silent" $
