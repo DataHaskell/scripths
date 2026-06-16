@@ -23,11 +23,12 @@ common warnings
 
 library
     import:           warnings
-    exposed-modules:  ScriptHs.Parser,
+    exposed-modules:  ScriptHs.CLI.Types,
                       ScriptHs.Compiled,
-                      ScriptHs.Render,
                       ScriptHs.Markdown,
                       ScriptHs.Notebook,
+                      ScriptHs.Parser,
+                      ScriptHs.Render,
                       ScriptHs.Repl,
                       ScriptHs.Run,
                       ScriptHs.Version

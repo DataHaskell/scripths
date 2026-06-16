@@ -13,7 +13,9 @@ import System.CPUTime (getCPUTime)
 
 import ScriptHs.Markdown (
     CodeOutput (..),
+    CodeStyle,
     MimeType (..),
+    OutputStyle,
     Segment (..),
     parseMarkdown,
     reassemble,
@@ -37,10 +39,11 @@ type IndexedBlocks = [(Int, [Line])]
 clean; output written to a file (@-o@ or @--in-place@) is stamped with the
 current scripths version tag at the top.
 -}
-runNotebook :: RunOptions -> FilePath -> Maybe FilePath -> IO ()
-runNotebook opts path outputPath = do
+runNotebook ::
+    OutputStyle -> CodeStyle -> RunOptions -> FilePath -> Maybe FilePath -> IO ()
+runNotebook outputStyle codeStyle opts path outputPath = do
     contents <- stripBom <$> TIO.readFile path
-    outputMd <- processNotebook opts path contents
+    outputMd <- processNotebook outputStyle codeStyle opts path contents
     case outputPath of
         Nothing -> TIO.putStr outputMd
         Just output -> TIO.writeFile output (stampVersion NotebookTag outputMd)
@@ -49,22 +52,33 @@ runNotebook opts path outputPath = do
 stripBom :: Text -> Text
 stripBom t = fromMaybe t (T.stripPrefix "\65279" t)
 
-processNotebook :: RunOptions -> FilePath -> Text -> IO Text
-processNotebook opts notebookPath contents = do
+processNotebook ::
+    OutputStyle -> CodeStyle -> RunOptions -> FilePath -> Text -> IO Text
+processNotebook outputStyle codeStyle opts notebookPath contents = do
     let indexedSegments = zip [0 ..] (parseMarkdown contents)
         (metas, indexedCodeBlocks) = parseBlocks indexedSegments
     if null indexedCodeBlocks
         then pure contents
-        else executeCodeCells opts notebookPath metas indexedSegments indexedCodeBlocks
+        else
+            executeCodeCells
+                outputStyle
+                codeStyle
+                opts
+                notebookPath
+                metas
+                indexedSegments
+                indexedCodeBlocks
 
 executeCodeCells ::
+    OutputStyle ->
+    CodeStyle ->
     RunOptions ->
     FilePath ->
     CabalMeta ->
     IndexedSegments ->
     IndexedBlocks ->
     IO Text
-executeCodeCells opts notebookPath meta allSegments codeBlocks = do
+executeCodeCells outputStyle codeStyle opts notebookPath meta allSegments codeBlocks = do
     let ghciScript0 = generatedMarkedScript "" codeBlocks
     nonce <- makeNonce ghciScript0
     let ghciScript = generatedMarkedScript nonce codeBlocks
@@ -76,8 +90,8 @@ executeCodeCells opts notebookPath meta allSegments codeBlocks = do
             map
                 (fmap (scrubCellOutput nonce indices))
                 (splitByMarkers nonce rawOutput indices)
-        blocksWithOutput = addOutputToSegments outputs allSegments
-    pure $ reassemble blocksWithOutput
+        blocksWithOutput = addOutputToSegments outputStyle outputs allSegments
+    pure $ reassemble codeStyle blocksWithOutput
 
 {- | A per-run hex nonce woven into every cell-end marker so a cell's own output
 cannot spoof a marker and misattribute another cell's output. Mixes the process
@@ -104,11 +118,16 @@ scrubCellOutput nonce indices =
   where
     stripMarkers t = foldr (\i acc -> T.replace (mkMarker nonce i) "" acc) t indices
 
-addOutputToSegments :: [(Int, Text)] -> IndexedSegments -> [Segment]
-addOutputToSegments outputs = map addOutput
+addOutputToSegments ::
+    OutputStyle -> [(Int, Text)] -> IndexedSegments -> [Segment]
+addOutputToSegments outputStyle outputs = map addOutput
   where
     addOutput :: (Int, Segment) -> Segment
-    addOutput (i, CodeBlock lang code _) = CodeBlock lang code (fmap (CodeOutput MimePlain) (lookup i outputs))
+    addOutput (i, CodeBlock lang code _) =
+        CodeBlock
+            lang
+            code
+            (fmap (CodeOutput outputStyle MimePlain) (lookup i outputs))
     addOutput (_, seg) = seg
 
 mkIndexedCodeSegments :: IndexedSegments -> IndexedSegments

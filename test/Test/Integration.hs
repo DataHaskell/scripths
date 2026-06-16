@@ -5,6 +5,7 @@ import System.Environment (lookupEnv)
 import Test.Tasty (TestTree, testGroup)
 import Test.Tasty.HUnit (assertBool, testCase)
 
+import ScriptHs.Markdown
 import ScriptHs.Notebook (processNotebook)
 import ScriptHs.Run (defaultRunOptions)
 
@@ -34,7 +35,13 @@ integrationTests =
                                 , "\"rendered-ok\" :: String"
                                 , "```"
                                 ]
-                    out <- processNotebook defaultRunOptions "/tmp/scripths-integration.md" nb
+                    out <-
+                        processNotebook
+                            defaultOutputStyle
+                            defaultCodeStyle
+                            defaultRunOptions
+                            "/tmp/scripths-integration.md"
+                            nb
                     assertBool "renders the cell value" ("rendered-ok" `T.isInfixOf` out)
                     assertBool
                         "no ScripthsInternal leak"
