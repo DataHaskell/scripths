@@ -37,8 +37,7 @@ integrationTests =
                                 ]
                     out <-
                         processNotebook
-                            defaultOutputStyle
-                            defaultCodeStyle
+                            defaultRenderOptions
                             defaultRunOptions
                             "/tmp/scripths-integration.md"
                             nb

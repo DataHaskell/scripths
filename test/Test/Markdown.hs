@@ -38,6 +38,28 @@ markdownTests =
                         lang @?= "haskell"
                         assertBool "has print 42" (T.isInfixOf "print 42" code)
                     other -> assertFailure $ "expected [CodeBlock], got: " ++ show other
+            , testCase "adjacent code blocks emit no spurious prose between them" $ do
+                let input =
+                        T.unlines
+                            [ "```haskell"
+                            , "A"
+                            , "```"
+                            , ""
+                            , "```haskell"
+                            , "B"
+                            , "```"
+                            ]
+                let segs = parseMarkdown input
+                case segs of
+                    [CodeBlock{}, CodeBlock{}] -> pure ()
+                    other ->
+                        assertFailure $
+                            "expected [CodeBlock, CodeBlock], got: " ++ show other
+            , testCase "whitespace-only trailing lines are not a prose segment" $ do
+                let segs = parseMarkdown (T.unlines ["```haskell", "A", "```", "", "  "])
+                case segs of
+                    [CodeBlock{}] -> pure ()
+                    other -> assertFailure $ "expected [CodeBlock], got: " ++ show other
             , testCase "four backticks is not a code fence" $ do
                 let input =
                         T.unlines
@@ -99,7 +121,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [CodeBlock _ _ (Just (CodeOutput _ m _)), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
+                    [CodeBlock _ _ (Just (CodeOutput m _)), Prose _] -> assertBool "mime is latex" (m == MimeLatex)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "svg mimetype" $ do
                 let input =
@@ -116,7 +138,7 @@ markdownTests =
                 let segs = parseMarkdown input
                 length segs @?= 2
                 case segs of
-                    [CodeBlock _ _ (Just (CodeOutput _ m _)), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
+                    [CodeBlock _ _ (Just (CodeOutput m _)), Prose _] -> assertBool "mime is svg" (m == MimeSvg)
                     other -> assertFailure $ "expected [CodeBlock, Prose], got: " ++ show other
             , testCase "multiple code blocks" $ do
                 let input =
@@ -146,7 +168,7 @@ markdownTests =
                 length outputBlocks @?= 2
                 assertBool
                     "all mimeType plain"
-                    (all (== MimePlain) [m | (Just (CodeOutput _ m _)) <- outputBlocks])
+                    (all (== MimePlain) [m | (Just (CodeOutput m _)) <- outputBlocks])
             , testCase "non-haskell code block preserved" $ do
                 let input =
                         T.unlines
@@ -190,22 +212,27 @@ markdownTests =
             ]
         , testGroup
             "reassemble"
-            [ testCase "prose without output" $ do
-                let result = reassemble defaultCodeStyle [Prose "Hello\n"]
+            [ testCase "reassemble == reassembleWith defaultRenderOptions" $ do
+                let segs =
+                        [ CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "hi")
+                        , Prose "p\n"
+                        ]
+                reassemble segs @?= reassembleWith defaultRenderOptions segs
+            , testCase "prose without output" $ do
+                let result = reassemble [Prose "Hello\n"]
                 result @?= "Hello\n"
             , testCase "code block without output" $ do
-                let result = reassemble defaultCodeStyle [CodeBlock "haskell" "print 42\n" Nothing]
+                let result = reassemble [CodeBlock "haskell" "print 42\n" Nothing]
                 assertBool "has fence" (T.isInfixOf "```haskell" result)
                 assertBool "has code" (T.isInfixOf "print 42" result)
                 assertBool "no blockquote" (not $ T.isInfixOf "> " result)
             , testCase "code block with output" $ do
                 let result =
                         reassemble
-                            defaultCodeStyle
                             [ CodeBlock
                                 "haskell"
                                 "print 42\n"
-                                (Just $ CodeOutput defaultOutputStyle MimePlain "42")
+                                (Just $ CodeOutput MimePlain "42")
                             ]
                 assertBool "has fence" (T.isInfixOf "```haskell" result)
                 assertBool "has code" (T.isInfixOf "print 42" result)
@@ -213,11 +240,10 @@ markdownTests =
             , testCase "code block with multi-line output" $ do
                 let result =
                         reassemble
-                            defaultCodeStyle
                             [ CodeBlock
                                 "hs"
                                 "print [1,2]\n"
-                                (Just $ CodeOutput defaultOutputStyle MimePlain "1\n2")
+                                (Just $ CodeOutput MimePlain "1\n2")
                             ]
                 assertBool "has > 1" (T.isInfixOf "> 1" result)
                 assertBool "has > 2" (T.isInfixOf "> 2" result)
@@ -227,14 +253,14 @@ markdownTests =
                         , CodeBlock
                             "haskell"
                             "print 42\n"
-                            (Just $ CodeOutput defaultOutputStyle MimePlain "42")
+                            (Just $ CodeOutput MimePlain "42")
                         , Prose "\nSome text.\n"
                         , CodeBlock
                             "haskell"
                             "print 99\n"
-                            (Just $ CodeOutput defaultOutputStyle MimePlain "99")
+                            (Just $ CodeOutput MimePlain "99")
                         ]
-                let result = reassemble defaultCodeStyle segs
+                let result = reassemble segs
 
                 assertBool "has title" (T.isInfixOf "# Title" result)
                 assertBool "has first output" (T.isInfixOf "> 42" result)
@@ -253,32 +279,38 @@ markdownTests =
             "Output style"
             [ testGroup
                 "raw"
-                [ testCase "Raw output" $ do
+                [ testCase "raw output drops the blockquote prefix" $ do
                     let result =
-                            reassemble
-                                defaultCodeStyle
-                                [CodeBlock "hs" "x\n" (Just $ CodeOutput OutputRaw MimePlain "hello")]
-                    assertBool "Not quoted" (T.isInfixOf "hello" result)
+                            reassembleWith
+                                (RenderOptions defaultCodeStyle OutputRaw)
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "hello")]
+                    assertBool "has raw output" (T.isInfixOf "hello" result)
+                    assertBool "not quoted" (not (T.isInfixOf "> hello" result))
+                , testCase "remove-code + raw drops both the fence and the prefix" $ do
+                    let result =
+                            reassembleWith
+                                (RenderOptions RemoveCode OutputRaw)
+                                [CodeBlock "hs" "x = 1\n" (Just $ CodeOutput MimePlain "hello")]
+                    assertBool "has raw output" (T.isInfixOf "hello" result)
+                    assertBool "no code fence" (not (T.isInfixOf "```" result))
+                    assertBool "no blockquote prefix" (not (T.isInfixOf "> " result))
                 ]
             , testGroup
                 "blockquote"
                 [ testCase "single line" $ do
                     let result =
                             reassemble
-                                defaultCodeStyle
-                                [CodeBlock "hs" "x\n" (Just $ CodeOutput defaultOutputStyle MimePlain "hello")]
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "hello")]
                     assertBool "blockquoted" (T.isInfixOf "> hello" result)
                 , testCase "empty lines in output get bare >" $ do
                     let result =
                             reassemble
-                                defaultCodeStyle
-                                [CodeBlock "hs" "x\n" (Just $ CodeOutput defaultOutputStyle MimePlain "a\n\nb")]
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "a\n\nb")]
                     assertBool "has bare >" (T.isInfixOf "\n> \n" result)
                 , testCase "renders the scripths:mime marker (not the legacy sabela)" $ do
                     let result =
                             reassemble
-                                defaultCodeStyle
-                                [CodeBlock "hs" "x\n" (Just $ CodeOutput defaultOutputStyle MimePlain "y")]
+                                [CodeBlock "hs" "x\n" (Just $ CodeOutput MimePlain "y")]
                     assertBool "uses scripths:mime" (T.isInfixOf "scripths:mime" result)
                     assertBool "no sabela:mime" (not (T.isInfixOf "sabela:mime" result))
                 ]
@@ -289,6 +321,18 @@ markdownTests =
                 let once = roundTrip docWithOutput
                     twice = roundTrip once
                 twice @?= once
+            , testCase "raw output re-parses as output and is a fixed point" $ do
+                let raw = reassembleWith (RenderOptions DisplayCode OutputRaw)
+                    segs =
+                        [CodeBlock "haskell" "x = 1\n" (Just $ CodeOutput MimePlain "a\n\nb")]
+                    once = raw segs
+                case parseMarkdown once of
+                    [CodeBlock _ _ (Just (CodeOutput MimePlain body))] ->
+                        assertBool "output recovered, not orphaned as prose" $
+                            T.isInfixOf "a" body && T.isInfixOf "b" body
+                    other ->
+                        assertFailure $ "expected one CodeBlock with output, got: " ++ show other
+                raw (parseMarkdown once) @?= once
             , testCase "newline count does not grow across re-runs" $ do
                 let once = roundTrip docWithOutput
                     twice = roundTrip once
@@ -330,7 +374,7 @@ markdownTests =
         ]
 
 roundTrip :: Text -> Text
-roundTrip = reassemble defaultCodeStyle . parseMarkdown
+roundTrip = reassemble . parseMarkdown
 
 nlCount :: Text -> Int
 nlCount = T.length . T.filter (== '\n')

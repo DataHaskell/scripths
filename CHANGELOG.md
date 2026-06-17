@@ -1,6 +1,13 @@
 # Revision history for scripths
 
 
+## 0.5.2.0 -- 2026-06-16
+* **Styling with `RenderOptions`.** You can now have the output quoted vs unquoted
+  and the code shown or not (code not shown is if you want to export the results only).
+  Thanks to @tchoutri
+* **Blank-line fix**: whitespace-only prose between two code fences no longer
+  becomes a spurious empty prose segment.
+
 ## 0.4.1.0 -- 2056-05-31
 * **Custom-prelude support**: auto print (our hook to rout evething but strings to shw)
   now doesn't assume a prelude.

@@ -9,9 +9,10 @@ import ScriptHs.Markdown (
     CodeOutput (..),
     CodeStyle (..),
     MimeType (..),
+    RenderOptions (..),
     Segment (..),
-    defaultCodeStyle,
     defaultOutputStyle,
+    defaultRenderOptions,
  )
 import ScriptHs.Notebook (
     addOutputToSegments,
@@ -158,12 +159,12 @@ notebookTests =
                             , CodeBlock
                                 "hs"
                                 "print 3\n"
-                                (Just $ CodeOutput defaultOutputStyle MimePlain "old-should-be-replaced")
+                                (Just $ CodeOutput MimePlain "old-should-be-replaced")
                             )
                         , (4, Prose "outro\n")
                         ]
 
-                let result = addOutputToSegments defaultOutputStyle outputs indexedSegs
+                let result = addOutputToSegments outputs indexedSegs
 
                 length result @?= length indexedSegs
 
@@ -174,12 +175,12 @@ notebookTests =
                     @?= CodeBlock
                         "haskell"
                         "print 1\n"
-                        (Just $ CodeOutput defaultOutputStyle MimePlain "out-1")
+                        (Just $ CodeOutput MimePlain "out-1")
                 result !! 3
                     @?= CodeBlock
                         "hs"
                         "print 3\n"
-                        (Just $ CodeOutput defaultOutputStyle MimePlain "out-3")
+                        (Just $ CodeOutput MimePlain "out-3")
 
                 result !! 2 @?= CodeBlock "python" "print('x')\n" Nothing
             ]
@@ -246,7 +247,7 @@ notebookTests =
             [ testCase "no code blocks => returns input unchanged" $ do
                 let input = T.unlines ["# Title", "", "Just prose.", ""]
                 out <-
-                    processNotebook defaultOutputStyle defaultCodeStyle defaultRunOptions "" input
+                    processNotebook defaultRenderOptions defaultRunOptions "" input
                 out @?= input
             , testCase "non-haskell code blocks only => returns input unchanged" $ do
                 let input =
@@ -260,7 +261,7 @@ notebookTests =
                             , "more prose"
                             ]
                 out <-
-                    processNotebook defaultOutputStyle defaultCodeStyle defaultRunOptions "" input
+                    processNotebook defaultRenderOptions defaultRunOptions "" input
                 out @?= input
             ]
         , testGroup
@@ -292,7 +293,11 @@ notebookTests =
                             , "```"
                             ]
                 result <-
-                    processNotebook defaultOutputStyle RemoveCode defaultRunOptions "" input
+                    processNotebook
+                        (RenderOptions RemoveCode defaultOutputStyle)
+                        defaultRunOptions
+                        ""
+                        input
                 result
                     @?= T.unlines
                         [ "# Title"

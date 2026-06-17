@@ -15,6 +15,8 @@ import System.Exit (exitFailure, exitSuccess)
 import System.FilePath (takeExtension)
 import System.IO (hPutStrLn, stderr)
 
+import ScriptHs.CLI.Types
+import ScriptHs.Markdown
 import ScriptHs.Notebook (runNotebook)
 import ScriptHs.Parser (parseScript)
 import ScriptHs.Run (RunOptions (..), defaultRunOptions, runScript)
@@ -24,8 +26,6 @@ import ScriptHs.Version (
     tagStyleFor,
     tagVersion,
  )
-import ScriptHs.CLI.Types
-import ScriptHs.Markdown
 
 main :: IO ()
 main = do
@@ -48,7 +48,12 @@ main = do
                                 { roPackages = pkgs
                                 , roEnclosingProject = not (argNoLocalProject a)
                                 }
-                    dispatch (argOutputStyle a) (argCodeStyle a) opts path outPath
+                    let renderOpts =
+                            RenderOptions
+                                { renderCodeStyle = argCodeStyle a
+                                , renderOutputStyle = argOutputStyle a
+                                }
+                    dispatch renderOpts opts path outPath
 
 {- | Resolve the output destination, honouring @--in-place@: write back over the
 notebook itself. In-place is only meaningful for notebooks (the @.ghci@\/@.hs@
@@ -67,11 +72,12 @@ resolveOutput a path
 isNotebook :: FilePath -> Bool
 isNotebook path = takeExtension path `elem` [".md", ".markdown"]
 
-dispatch :: OutputStyle ->  CodeStyle -> RunOptions -> FilePath -> Maybe FilePath -> IO ()
-dispatch outputStyle codeStyle opts path outputPath =
+dispatch ::
+    RenderOptions -> RunOptions -> FilePath -> Maybe FilePath -> IO ()
+dispatch renderOpts opts path outputPath =
     case takeExtension path of
-        ".md" -> runNotebook outputStyle codeStyle opts path outputPath
-        ".markdown" -> runNotebook outputStyle codeStyle opts path outputPath
+        ".md" -> runNotebook renderOpts opts path outputPath
+        ".markdown" -> runNotebook renderOpts opts path outputPath
         _ -> do
             contents <- TIO.readFile path
             let sf = parseScript contents

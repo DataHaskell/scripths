@@ -2,6 +2,7 @@ module ScriptHs.Markdown (
     Segment (..),
     parseMarkdown,
     reassemble,
+    reassembleWith,
     MimeType (..),
     CodeOutput (..),
     CodeStyle (..),
@@ -10,6 +11,8 @@ module ScriptHs.Markdown (
     OutputStyle (..),
     parseOutputStyle,
     defaultOutputStyle,
+    RenderOptions (..),
+    defaultRenderOptions,
 ) where
 
 import Data.Text (Text)
@@ -44,6 +47,18 @@ parseOutputStyle _ = Nothing
 defaultOutputStyle :: OutputStyle
 defaultOutputStyle = OutputQuoted
 
+{- | Render-time presentation choices; kept out of the parsed 'CodeOutput'
+content model. Consumed only by 'reassembleWith'.
+-}
+data RenderOptions = RenderOptions
+    { renderCodeStyle :: CodeStyle
+    , renderOutputStyle :: OutputStyle
+    }
+    deriving (Eq, Show)
+
+defaultRenderOptions :: RenderOptions
+defaultRenderOptions = RenderOptions defaultCodeStyle defaultOutputStyle
+
 data MimeType
     = MimeHtml
     | MimeMarkdown
@@ -54,8 +69,7 @@ data MimeType
     | MimePlain
     deriving (Show, Eq)
 
-data CodeOutput = CodeOutput OutputStyle MimeType Text
-    deriving (Show, Eq)
+data CodeOutput = CodeOutput MimeType Text deriving (Show, Eq)
 
 data Segment
     = Prose Text
@@ -66,7 +80,7 @@ parseMarkdown :: Text -> [Segment]
 parseMarkdown = parseMarkdown' [] . T.lines
 
 parseMarkdown' :: [Text] -> [Text] -> [Segment]
-parseMarkdown' acc [] = [Prose prose | not (T.null prose)]
+parseMarkdown' acc [] = [Prose prose | not (isBlank prose)]
   where
     prose = T.unlines acc
 parseMarkdown' acc (line : rest) = case fenceLang line of
@@ -76,24 +90,23 @@ parseMarkdown' acc (line : rest) = case fenceLang line of
             prose = T.unlines acc
             (codeLines, rest') = fmap (drop 1) (break ((== fence) . T.strip) rest)
             (output, rest'') = case dropWhile ((== "") . T.strip) rest' of
-                (x : xs) ->
-                    if not (isMimeMarkerLine x)
-                        then (Nothing, rest')
-                        else
-                            let
-                                (cOutput, afterOutput) = span (T.isPrefixOf "> ") xs
-                                mType = mimeFromTag x
-                             in
-                                ( Just
-                                    (CodeOutput OutputQuoted mType (T.unlines (map (T.drop (T.length "> ")) cOutput)))
-                                , afterOutput
-                                )
-                [] -> (Nothing, rest')
+                (x : xs)
+                    | isMimeMarkerLine x ->
+                        let (body, afterOutput) = extractOutput x xs
+                         in (Just (CodeOutput (mimeFromTag x) body), afterOutput)
+                _ -> (Nothing, rest')
             segments =
-                [Prose prose | not (T.null prose)]
+                [Prose prose | not (isBlank prose)]
                     ++ [CodeBlock lang (T.unlines codeLines) output]
          in
             segments ++ parseMarkdown' [] rest''
+
+{- | A prose run that is empty or only whitespace carries no cell content;
+the blank line(s) between two code fences parse to such a run and must not
+become a spurious prose segment.
+-}
+isBlank :: Text -> Bool
+isBlank = T.null . T.strip
 
 fence :: Text
 fence = "```"
@@ -114,22 +127,52 @@ still recognise the legacy @sabela:mime@ marker when re-parsing older notebooks.
 mimeMarker :: Text
 mimeMarker = "<!-- scripths:mime "
 
--- | Does this line open a rendered-output block (either marker spelling)?
+{- | Does this line open a rendered-output block? Matches either marker
+spelling, quoted (@> @) or raw.
+-}
 isMimeMarkerLine :: Text -> Bool
 isMimeMarkerLine x =
-    T.isPrefixOf "> <!-- scripths:mime" x || T.isPrefixOf "> <!-- sabela:mime" x
+    T.isPrefixOf "<!-- scripths:mime" bare || T.isPrefixOf "<!-- sabela:mime" bare
+  where
+    bare = if T.isPrefixOf "> " x then T.drop 2 x else x
+
+{- | Closing marker that terminates a raw output block so it re-parses; quoted
+blocks self-delimit via their @> @ prefix and need no terminator.
+-}
+endMarker :: Text
+endMarker = "<!-- /scripths:mime -->"
+
+isEndMarkerLine :: Text -> Bool
+isEndMarkerLine l = T.strip l == endMarker
+
+{- | Collect an output block's body and the lines after it: a quoted block
+runs while lines keep the @> @ prefix; a raw block runs to 'endMarker'.
+-}
+extractOutput :: Text -> [Text] -> (Text, [Text])
+extractOutput marker xs
+    | T.isPrefixOf "> " marker =
+        let (body, after) = span (T.isPrefixOf "> ") xs
+         in (T.unlines (map (T.drop (T.length "> ")) body), after)
+    | otherwise =
+        let (body, after) = break isEndMarkerLine xs
+         in (T.unlines body, drop 1 after)
 
 fenceCodeSegment :: Text -> Text -> Text
 fenceCodeSegment lang output
     | T.null (T.strip output) = ""
     | otherwise = T.unlines ["", fence <> lang, T.stripEnd output, fence, ""]
 
-{- | Render segments back to markdown idempotently: the blank-line run at each
-seam between segments collapses to one blank line and the document's leading/
-trailing blanks are trimmed, so re-running (e.g. @--in-place@) adds no new lines.
+-- | 'reassembleWith' under 'defaultRenderOptions'; the back-compatible default.
+reassemble :: [Segment] -> Text
+reassemble = reassembleWith defaultRenderOptions
+
+{- | Render segments back to markdown idempotently (a @--in-place@ re-run is a
+fixed point): seam blank runs collapse to one and leading/trailing blanks are
+trimmed. Output re-parses under every style — 'OutputRaw' is bounded by a
+closing 'endMarker', and 'RemoveCode' leaves no fence so a re-run is a no-op.
 -}
-reassemble :: CodeStyle -> [Segment] -> Text
-reassemble codeStyle = finalize . foldr (joinSeam . renderSegment codeStyle) ""
+reassembleWith :: RenderOptions -> [Segment] -> Text
+reassembleWith opts = finalize . foldr (joinSeam . renderSegment opts) ""
   where
     joinSeam "" acc = acc
     joinSeam piece "" = piece
@@ -143,26 +186,24 @@ reassemble codeStyle = finalize . foldr (joinSeam . renderSegment codeStyle) ""
         let stripped = T.dropWhileEnd (== '\n') (T.dropWhile (== '\n') t)
          in if T.null stripped then "" else stripped <> "\n"
 
-renderSegment :: CodeStyle -> Segment -> Text
+renderSegment :: RenderOptions -> Segment -> Text
 renderSegment _ (Prose t) = t
 renderSegment _ (CodeBlock lang code Nothing) = fenceCodeSegment lang code
-renderSegment codeStyle (CodeBlock lang code (Just output)) =
-    let codeFence = case codeStyle of
+renderSegment opts (CodeBlock lang code (Just output)) =
+    let codeFence = case renderCodeStyle opts of
             DisplayCode -> fenceCodeSegment lang code
             RemoveCode -> mempty
-     in codeFence <> blockQuote output
+     in codeFence <> blockQuote (renderOutputStyle opts) output
 
-blockQuote :: CodeOutput -> Text
-blockQuote (CodeOutput outputStyle mimeType t) =
-    let
-        ls = (mimeMarker <> mimeIndicator mimeType <> " -->") : T.lines t
-        trimmed = reverse $ dropWhile T.null $ reverse ls
-        styling = case outputStyle of
-            OutputQuoted -> "> "
-            OutputRaw -> ""
-        output = T.unlines $ map (\l -> if T.null l then styling else styling <> l) trimmed
-     in
-        output <> "\n"
+blockQuote :: OutputStyle -> CodeOutput -> Text
+blockQuote outputStyle (CodeOutput mimeType t) =
+    case outputStyle of
+        OutputQuoted -> T.unlines (map quote (marker : body)) <> "\n"
+        OutputRaw -> T.unlines (marker : body ++ [endMarker]) <> "\n"
+  where
+    marker = mimeMarker <> mimeIndicator mimeType <> " -->"
+    body = reverse $ dropWhile T.null $ reverse (T.lines t)
+    quote l = if T.null l then "> " else "> " <> l
 
 mimeIndicator :: MimeType -> Text
 mimeIndicator m = case m of
