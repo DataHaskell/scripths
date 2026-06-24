@@ -8,4 +8,4 @@ import qualified Data.Text as T
 
 T.take 10 "hello"
 
-double 5
+duble 5

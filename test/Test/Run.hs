@@ -12,6 +12,7 @@ import ScriptHs.Run (
     deriveProjectName,
     renderCabalFile,
     renderCabalProject,
+    scriptGhciBody,
     usesTemplateHaskell,
  )
 
@@ -144,6 +145,26 @@ runTests =
             , testCase "false for a plain notebook" $
                 usesTemplateHaskell emptyMeta [HaskellLine "1 + 1", Import "import Data.List"]
                     @?= False
+            ]
+        , testGroup
+            "scriptGhciBody"
+            [ testCase "wraps a cell with a LINE pragma naming the script path + source line" $ do
+                let body = scriptGhciBody "./examples/analysis.ghci" [(11, HaskellLine "duble 5")]
+                assertBool
+                    "tagged pragma"
+                    (T.isInfixOf "{-# LINE 11 \"./examples/analysis.ghci\" #-}" body)
+            , testCase "uses the original source line, not the rendered position" $ do
+                let body =
+                        scriptGhciBody
+                            "f.ghci"
+                            [(1, Import "import Data.Text"), (5, HaskellLine "x = 1")]
+                assertBool "statement at line 5" (T.isInfixOf "{-# LINE 5 \"f.ghci\" #-}" body)
+            , testCase "imports stay bare (a LINE pragma cannot attach at the prompt)" $ do
+                let body =
+                        scriptGhciBody
+                            "f.ghci"
+                            [(1, Import "import Data.Text"), (5, HaskellLine "x = 1")]
+                assertBool "import not pragma'd" (not (T.isInfixOf "{-# LINE 1 " body))
             ]
         ]
   where

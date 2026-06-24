@@ -15,6 +15,7 @@ module ScriptHs.Run (
     deriveProjectName,
     renderCabalFile,
     renderCabalProject,
+    scriptGhciBody,
     usesTemplateHaskell,
 ) where
 
@@ -33,7 +34,7 @@ import ScriptHs.Parser (
     ScriptFile (scriptLines, scriptMeta),
     SourceRepoPin (..),
  )
-import ScriptHs.Render (toGhciScript)
+import ScriptHs.Render (toGhciScript, toGhciScriptTagged)
 import ScriptHs.Repl (
     autoPrintDirective,
     cdDirective,
@@ -77,25 +78,50 @@ data RunOptions = RunOptions
 defaultRunOptions :: RunOptions
 defaultRunOptions = RunOptions{roPackages = [], roEnclosingProject = True}
 
-runScript :: RunOptions -> FilePath -> ScriptFile -> IO ()
-runScript = runWithCont runGhc
+{- | Run a @.ghci@\/@.hs@ script. Cells are rendered with @{\-# LINE #-\}@ pragmas
+tagged with the script path (numbering from 'parseScriptNumbered'), so a failing
+cell's diagnostics report the original file and line — GHC even renders the
+source caret from it — rather than a position in the synthetic repl input.
+-}
+runScript :: RunOptions -> FilePath -> ScriptFile -> [(Int, Line)] -> IO ()
+runScript opts scriptPath sf numbered =
+    runWithCont runGhc opts scriptPath sf (scriptGhciBody scriptPath numbered)
 
+{- | Run a script for its captured output (notebooks). The generated cell stream
+carries marker statements and no user-source line mapping, so it renders untagged.
+-}
 runScriptCapture :: RunOptions -> FilePath -> ScriptFile -> IO T.Text
-runScriptCapture = runWithCont captureGhc
+runScriptCapture opts scriptPath sf =
+    runWithCont captureGhc opts scriptPath sf (toGhciScript (scriptLines sf))
 
 runWithCont ::
     (FilePath -> FilePath -> FilePath -> IO a) ->
     RunOptions ->
     FilePath ->
     ScriptFile ->
+    T.Text ->
     IO a
-runWithCont cont opts scriptPath sf = do
+runWithCont cont opts scriptPath sf renderedBody = do
     scriptAbsPath <- makeAbsolute scriptPath
     userCwd <- getCurrentDirectory
     warnUnknownKeys (metaUnknownKeys (scriptMeta sf))
     projectDir <-
-        ensureProject opts userCwd scriptAbsPath (scriptMeta sf) (scriptLines sf)
+        ensureProject
+            opts
+            userCwd
+            scriptAbsPath
+            (scriptMeta sf)
+            (scriptLines sf)
+            renderedBody
     cont userCwd projectDir (projectDir </> "script.ghci")
+
+{- | The GHCi body for a script: every cell wrapped with a @{\-# LINE n "path" #-\}@
+pragma so GHC files diagnostics against the original source file and line. The
+tag is the script path as given — relative to the directory the repl runs in —
+so GHC can read it back to render the source caret.
+-}
+scriptGhciBody :: FilePath -> [(Int, Line)] -> T.Text
+scriptGhciBody scriptPath = toGhciScriptTagged (T.pack scriptPath)
 
 {- | Source for the throwaway executable's @Main.hs@. It only needs to typecheck
 (the repl never runs it), and is written prelude-agnostically so it compiles even
@@ -159,8 +185,14 @@ pathHash s = showHex (foldl' step 2166136261 s) ""
     step h c = (h `xor` fromIntegral (ord c)) * 16777619
 
 ensureProject ::
-    RunOptions -> FilePath -> FilePath -> CabalMeta -> [Line] -> IO FilePath
-ensureProject opts userCwd scriptAbsPath meta scriptCode = do
+    RunOptions ->
+    FilePath ->
+    FilePath ->
+    CabalMeta ->
+    [Line] ->
+    T.Text ->
+    IO FilePath
+ensureProject opts userCwd scriptAbsPath meta scriptCode renderedBody = do
     home <- getHomeDirectory
     let name = deriveProjectName scriptAbsPath
         projectDir = home </> ".scripths" </> name
@@ -199,9 +231,9 @@ ensureProject opts userCwd scriptAbsPath meta scriptCode = do
             | th =
                 compileCdSetup
                     <> compileCdTo userCwd
-                    <> toGhciScript scriptCode
+                    <> renderedBody
                     <> compileCdTo projectDir
-            | otherwise = toGhciScript scriptCode
+            | otherwise = renderedBody
     TIO.writeFile
         (projectDir </> "script.ghci")
         (autoPrintDirective <> cdDirective userCwd <> body)

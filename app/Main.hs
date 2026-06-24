@@ -18,7 +18,7 @@ import System.IO (hPutStrLn, stderr)
 import ScriptHs.CLI.Types
 import ScriptHs.Markdown
 import ScriptHs.Notebook (runNotebook)
-import ScriptHs.Parser (parseScript)
+import ScriptHs.Parser (parseScriptNumbered)
 import ScriptHs.Run (RunOptions (..), defaultRunOptions, runScript)
 import ScriptHs.Version (
     newerVersionWarning,
@@ -80,8 +80,8 @@ dispatch renderOpts opts path outputPath =
         ".markdown" -> runNotebook renderOpts opts path outputPath
         _ -> do
             contents <- TIO.readFile path
-            let sf = parseScript contents
-            runScript opts path sf
+            let (sf, numbered) = parseScriptNumbered contents
+            runScript opts path sf numbered
 
 -- | Resolve a @--package@ dir to absolute, requiring a package root (a @.cabal@).
 resolvePackageDir :: FilePath -> IO FilePath

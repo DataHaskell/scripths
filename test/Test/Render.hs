@@ -15,6 +15,7 @@ import ScriptHs.Render (
     renderLiterate,
     renderModuleText,
     toGhciScript,
+    toGhciScriptTagged,
     toModule,
  )
 
@@ -342,8 +343,77 @@ renderTests =
                             ]
                 length (splitBlocks result) @?= 1
             ]
+        , taggedTests
         , moduleTests
         ]
+
+{- | 'toGhciScriptTagged' prefixes every @:{ … :}@ block with a
+@{\-# LINE n "tag" #-\}@ pragma so GHC (esp. @-fdiagnostics-as-json@) reports
+cell-relative lines and the cell's file tag, neutralizing any preamble GHCi
+prepends. Directives, imports, pragmas and blanks stay bare (a LINE pragma
+cannot attach to them at the prompt).
+-}
+taggedTests :: TestTree
+taggedTests =
+    testGroup
+        "Tagged rendering (LINE pragmas)"
+        [ testCase "single statement gets a LINE pragma with its source line + tag" $ do
+            let result = toGhciScriptTagged "cell" [(3, HaskellLine "print 42")]
+            linePragmasIn result @?= ["{-# LINE 3 \"cell\" #-}"]
+        , testCase "the LINE pragma is the first line inside the :{ block" $ do
+            let result = toGhciScriptTagged "cell" [(3, HaskellLine "print 42")]
+            case splitBlocks result of
+                (block : _) ->
+                    map T.strip block @?= ["{-# LINE 3 \"cell\" #-}", "print 42"]
+                [] -> assertBool "expected a block" False
+        , testCase "directives, imports, pragmas and blanks are not tagged" $ do
+            let result =
+                    toGhciScriptTagged
+                        "cell"
+                        [ (1, Import "import Data.Text")
+                        , (2, Blank)
+                        , (3, Pragma "{-# LANGUAGE GADTs #-}")
+                        , (4, GhciCommand ":set -XOverloadedStrings")
+                        ]
+            linePragmasIn result @?= []
+        , testCase "merged type sig + binding share one pragma at the first line" $ do
+            let result =
+                    toGhciScriptTagged
+                        "cell"
+                        [ (5, HaskellLine "f :: Int -> Int")
+                        , (6, HaskellLine "f x = x + 1")
+                        ]
+            length (splitBlocks result) @?= 1
+            linePragmasIn result @?= ["{-# LINE 5 \"cell\" #-}"]
+        , testCase "comment attaching forward uses the comment's line number" $ do
+            let result =
+                    toGhciScriptTagged
+                        "cell"
+                        [ (2, HaskellLine "-- doc comment")
+                        , (3, HaskellLine "g y = y * 2")
+                        ]
+            length (splitBlocks result) @?= 1
+            linePragmasIn result @?= ["{-# LINE 2 \"cell\" #-}"]
+        , testCase "each statement block gets its own pragma at its own line" $ do
+            let result =
+                    toGhciScriptTagged
+                        "cell"
+                        [ (1, HaskellLine "x = 1")
+                        , (2, HaskellLine "print x")
+                        ]
+            length (splitBlocks result) @?= 2
+            linePragmasIn result @?= ["{-# LINE 1 \"cell\" #-}", "{-# LINE 2 \"cell\" #-}"]
+        , testCase "line numbers come from the source, not the rendered position" $ do
+            let result =
+                    toGhciScriptTagged
+                        "sabela-cell-7"
+                        [(42, HaskellLine "boom")]
+            linePragmasIn result @?= ["{-# LINE 42 \"sabela-cell-7\" #-}"]
+        ]
+
+linePragmasIn :: Text -> [Text]
+linePragmasIn =
+    filter (T.isPrefixOf "{-# LINE") . map T.strip . T.lines
 
 moduleTests :: TestTree
 moduleTests =

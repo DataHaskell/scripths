@@ -11,6 +11,9 @@ each unit, then assembles blocks accordingly.
 -}
 module ScriptHs.Render (
     toGhciScript,
+    toGhciScriptTagged,
+    numberedPieces,
+    linePragma,
 
     -- * Module rendering (notebook → standalone Haskell)
     ModuleParts (..),
@@ -33,6 +36,7 @@ module ScriptHs.Render (
     unRewriteSplice,
 ) where
 
+import Data.Bifunctor (second)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (intercalate)
 import Data.Maybe
@@ -64,9 +68,16 @@ Classification rules:
 toGhciScript :: [Line] -> Text
 toGhciScript = T.unlines . concatMap renderBlock . piecesToBlocks . toPieces
 
----------------------------------------------------------------
--- Kind and Piece
----------------------------------------------------------------
+{- | Like 'toGhciScript', but prefixes every @:{ … :}@ block with a
+@{\-# LINE n "tag" #-\}@ pragma carrying the unit's original source line, so GHC
+diagnostics (especially @-fdiagnostics-as-json@) come back cell-relative and
+filed under @tag@ — regardless of any preamble the caller prepends to the
+session input. Directives, imports, pragmas and blank lines stay bare: a LINE
+pragma cannot attach to them at the GHCi prompt.
+-}
+toGhciScriptTagged :: Text -> [(Int, Line)] -> Text
+toGhciScriptTagged tag =
+    T.unlines . concatMap (renderBlockTagged tag) . numberedBlocks
 
 data Kind
     = KComment
@@ -83,10 +94,6 @@ data Piece
     | PImport Text
     | PUnit Kind [Line]
     deriving (Show)
-
----------------------------------------------------------------
--- Step 1: [Line] -> [Piece]
----------------------------------------------------------------
 
 toPieces :: [Line] -> [Piece]
 toPieces [] = []
@@ -140,10 +147,6 @@ isIndentedNonBlank _ = False
 isBlankLine :: Line -> Bool
 isBlankLine Blank = True
 isBlankLine _ = False
-
----------------------------------------------------------------
--- Classification
----------------------------------------------------------------
 
 classify :: Text -> [Text] -> Kind
 classify leadText contTexts
@@ -260,10 +263,6 @@ hasTopLevelEquals t = " = " `T.isInfixOf` t || T.isSuffixOf " =" t
 isCommentText :: Text -> Bool
 isCommentText t = "--" `T.isPrefixOf` T.stripStart t
 
----------------------------------------------------------------
--- Step 2: [Piece] -> [Block]
----------------------------------------------------------------
-
 {- | Normalize a piece stream: attach each comment unit forward onto the
 following non-comment unit, and merge runs of adjacent declarations into a
 single unit. Shared by 'toGhciScript' (block wrapping) and 'toModule'
@@ -279,17 +278,44 @@ mergePieces [] = []
 
 piecesToBlocks :: [Piece] -> [Block]
 piecesToBlocks = map pieceToBlock . mergePieces
-  where
-    pieceToBlock PBlank = SingleLine Blank
-    pieceToBlock (PGhciCommand t) = SingleLine (GhciCommand t)
-    pieceToBlock (PPragma t) = SingleLine (Pragma t)
-    pieceToBlock (PImport t) = SingleLine (Import t)
-    pieceToBlock (PUnit _ [l]) = SingleLine l
-    pieceToBlock (PUnit _ ls) = MultiLine ls
 
----------------------------------------------------------------
--- Rendering
----------------------------------------------------------------
+pieceToBlock :: Piece -> Block
+pieceToBlock PBlank = SingleLine Blank
+pieceToBlock (PGhciCommand t) = SingleLine (GhciCommand t)
+pieceToBlock (PPragma t) = SingleLine (Pragma t)
+pieceToBlock (PImport t) = SingleLine (Import t)
+pieceToBlock (PUnit _ [l]) = SingleLine l
+pieceToBlock (PUnit _ ls) = MultiLine ls
+
+{- | Pair each piece from 'toPieces' with the original line number of its first
+line. Relies on 'toPieces' being line-count preserving: every piece consumes
+exactly the lines it embeds. Shared by the tagged GHCi renderer and the
+compiled-module renderer so both file diagnostics the same way.
+-}
+numberedPieces :: [(Int, Line)] -> [(Int, Piece)]
+numberedPieces nls = go nls (toPieces (map snd nls))
+  where
+    go _ [] = []
+    go rest (p : ps) = case rest of
+        ((i, _) : _) -> (i, p) : go (drop (pieceLen p) rest) ps
+        [] -> []
+    pieceLen (PUnit _ ls) = length ls
+    pieceLen _ = 1
+
+{- | 'mergePieces' carrying each piece's first source line; a merge keeps the
+earliest line so a tagged block points at where the unit began.
+-}
+mergeNumberedPieces :: [(Int, Piece)] -> [(Int, Piece)]
+mergeNumberedPieces ((i, PUnit KComment l1) : (_, PUnit k l2) : rest)
+    | k /= KComment = mergeNumberedPieces ((i, PUnit k (l1 ++ l2)) : rest)
+mergeNumberedPieces ((i, PUnit KDeclaration l1) : (_, PUnit KDeclaration l2) : rest) =
+    mergeNumberedPieces ((i, PUnit KDeclaration (l1 ++ l2)) : rest)
+mergeNumberedPieces (p : rest) = p : mergeNumberedPieces rest
+mergeNumberedPieces [] = []
+
+numberedBlocks :: [(Int, Line)] -> [(Int, Block)]
+numberedBlocks =
+    map (second pieceToBlock) . mergeNumberedPieces . numberedPieces
 
 renderBlock :: Block -> [Text]
 renderBlock (SingleLine Blank) = [""]
@@ -302,16 +328,31 @@ renderBlock (MultiLine ls) = wrapMulti (map lineText ls)
 wrapMulti :: [Text] -> [Text]
 wrapMulti ls = [":{"] ++ ls ++ [":}"]
 
+{- | Render a block as 'renderBlock' does, but prefix the @:{ … :}@ body with a
+@{\-# LINE i "tag" #-\}@ pragma. Bare blocks (directives, imports, pragmas,
+blanks) carry no pragma — it could not attach to them at the prompt.
+-}
+renderBlockTagged :: Text -> (Int, Block) -> [Text]
+renderBlockTagged _ (_, SingleLine Blank) = [""]
+renderBlockTagged _ (_, SingleLine (GhciCommand t)) = [t]
+renderBlockTagged _ (_, SingleLine (Pragma t)) = [t]
+renderBlockTagged _ (_, SingleLine (Import t)) = [t]
+renderBlockTagged tag (i, SingleLine (HaskellLine t)) = wrapTagged tag i [t]
+renderBlockTagged tag (i, MultiLine ls) = wrapTagged tag i (map lineText ls)
+
+wrapTagged :: Text -> Int -> [Text] -> [Text]
+wrapTagged tag i ls = ":{" : linePragma i tag : ls ++ [":}"]
+
+-- | A @{\-# LINE n "tag" #-\}@ pragma routing diagnostics back to source.
+linePragma :: Int -> Text -> Text
+linePragma n tag = "{-# LINE " <> T.pack (show n) <> " \"" <> tag <> "\" #-}"
+
 lineText :: Line -> Text
 lineText Blank = ""
 lineText (GhciCommand t) = t
 lineText (Pragma t) = t
 lineText (Import t) = t
 lineText (HaskellLine t) = t
-
----------------------------------------------------------------
--- Module rendering: notebook cells -> standalone Haskell
----------------------------------------------------------------
 
 {- | The four buckets a sequence of notebook 'Line's sorts into when
 assembling a compilable module: language pragmas and imports (hoisted to the

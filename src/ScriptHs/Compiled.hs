@@ -28,8 +28,9 @@ import ScriptHs.Parser (Line (..))
 import ScriptHs.Render (
     Kind (..),
     Piece (..),
+    linePragma,
     lineText,
-    toPieces,
+    numberedPieces,
     unRewriteSplice,
  )
 
@@ -78,20 +79,6 @@ pieceIssue (PUnit k _) = case k of
     KIOBind ->
         Just
             "monadic binds (x <- …) are not allowed in compiled cells — move this to an interpreted cell below, or remove '-- compile'"
-
-{- | Pair each piece from 'toPieces' with the original line number of its
-first line. Relies on 'toPieces' being line-count preserving: every piece
-consumes exactly the lines it embeds.
--}
-numberedPieces :: [(Int, Line)] -> [(Int, Piece)]
-numberedPieces nls = go nls (toPieces (map snd nls))
-  where
-    go _ [] = []
-    go rest (p : ps) = case rest of
-        ((i, _) : _) -> (i, p) : go (drop (pieceLen p) rest) ps
-        [] -> []
-    pieceLen (PUnit _ ls) = length ls
-    pieceLen _ = 1
 
 -- | Extensions named by a @:set -X@\/@:seti -X@ line whose args are all @-X@.
 setExtensions :: Text -> [Text]
@@ -172,9 +159,6 @@ renderCompiledModule modName defaultExts extraImports chunks =
         , k `elem` [KComment, KDeclaration, KTHSplice]
         ]
     declLines = T.lines . unRewriteSplice . T.intercalate "\n" . map lineText
-
-linePragma :: Int -> Text -> Text
-linePragma n tag = "{-# LINE " <> T.pack (show n) <> " \"" <> tag <> "\" #-}"
 
 languagePragma :: Text -> Text
 languagePragma ext = "{-# LANGUAGE " <> ext <> " #-}"
