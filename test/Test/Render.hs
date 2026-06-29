@@ -200,6 +200,31 @@ renderTests =
                             , HaskellLine "y = 2"
                             ]
                 length (splitBlocks result) @?= 2
+            , testCase "type sig + single blank + binding stay in one block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "f :: Int -> Int"
+                            , Blank
+                            , HaskellLine "f x = x + 1"
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "two value bindings + single blank stay in one block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "x = 1"
+                            , Blank
+                            , HaskellLine "y = 2"
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "data decl + single blank + instance stay in one block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "data User = User { name :: String }"
+                            , Blank
+                            , HaskellLine "instance Show User where"
+                            , HaskellLine "  show u = name u"
+                            ]
+                length (splitBlocks result) @?= 1
             ]
         , testGroup
             "Mixed block splitting"

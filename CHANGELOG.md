@@ -1,6 +1,9 @@
 # Revision history for scripths
 
 
+## 0.5.3.1 -- 2026-06-28
+* Merge consecutive blank lines.
+
 ## 0.5.2.0 -- 2026-06-16
 * **Styling with `RenderOptions`.** You can now have the output quoted vs unquoted
   and the code shown or not (code not shown is if you want to export the results only).

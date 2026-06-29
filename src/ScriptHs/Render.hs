@@ -273,6 +273,8 @@ mergePieces (PUnit KComment l1 : PUnit k l2 : rest)
     | k /= KComment = mergePieces (PUnit k (l1 ++ l2) : rest)
 mergePieces (PUnit KDeclaration l1 : PUnit KDeclaration l2 : rest) =
     mergePieces (PUnit KDeclaration (l1 ++ l2) : rest)
+mergePieces (PUnit KDeclaration l1 : PBlank : PUnit KDeclaration l2 : rest) =
+    mergePieces (PUnit KDeclaration (l1 ++ l2) : rest)
 mergePieces (p : rest) = p : mergePieces rest
 mergePieces [] = []
 
@@ -309,6 +311,8 @@ mergeNumberedPieces :: [(Int, Piece)] -> [(Int, Piece)]
 mergeNumberedPieces ((i, PUnit KComment l1) : (_, PUnit k l2) : rest)
     | k /= KComment = mergeNumberedPieces ((i, PUnit k (l1 ++ l2)) : rest)
 mergeNumberedPieces ((i, PUnit KDeclaration l1) : (_, PUnit KDeclaration l2) : rest) =
+    mergeNumberedPieces ((i, PUnit KDeclaration (l1 ++ l2)) : rest)
+mergeNumberedPieces ((i, PUnit KDeclaration l1) : (_, PBlank) : (_, PUnit KDeclaration l2) : rest) =
     mergeNumberedPieces ((i, PUnit KDeclaration (l1 ++ l2)) : rest)
 mergeNumberedPieces (p : rest) = p : mergeNumberedPieces rest
 mergeNumberedPieces [] = []
