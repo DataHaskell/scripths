@@ -225,6 +225,93 @@ renderTests =
                             , HaskellLine "  show u = name u"
                             ]
                 length (splitBlocks result) @?= 1
+            , testCase "decl + blank + comment + decl stay in one block" $ do
+                -- Mutually recursive decls separated by a commented paragraph
+                -- must share a block or the forward reference fails in GHCi.
+                let result =
+                        toGhciScript
+                            [ HaskellLine "parseFactor = parens parseExpr"
+                            , Blank
+                            , HaskellLine "-- Level 1: Addition"
+                            , HaskellLine "parseExpr = chainl1 parseFactor op"
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "decl + comment + decl (no blank) stay in one block" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "f = g + 1"
+                            , HaskellLine "-- helper"
+                            , HaskellLine "g = 2"
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "blank/comment interleave between decls stays merged" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "numberParser = lexeme digits"
+                            , Blank
+                            , HaskellLine "-- 2. Expression Parsing"
+                            , Blank
+                            , HaskellLine "-- Level 3: Factors"
+                            , HaskellLine "parseFactor = numberParser"
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "double blank before a comment + decl still breaks" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "x = 1"
+                            , Blank
+                            , Blank
+                            , HaskellLine "-- fresh section"
+                            , HaskellLine "y = 2"
+                            ]
+                length (splitBlocks result) @?= 2
+            , testCase "merged gap lines are preserved inside the block" $ do
+                -- The blank and comment lines stay in the merged block so a
+                -- LINE pragma keeps every diagnostic on its original line.
+                let result =
+                        toGhciScript
+                            [ HaskellLine "f :: Int"
+                            , Blank
+                            , HaskellLine "-- note"
+                            , HaskellLine "f = 2"
+                            ]
+                splitBlocks result @?= [["f :: Int", "", "-- note", "f = 2"]]
+            ]
+        , testGroup
+            "Equals inside literals is not a binding"
+            [ testCase "print with ' = ' inside a string stays an action" $ do
+                -- Measured live: labelled prints classified as declarations
+                -- merge into one block and GHCi juxtaposes them into garbage.
+                let result =
+                        toGhciScript
+                            [ HaskellLine
+                                "print $ \"2 + 3 * 4 = \" ++ show (evalExpr \"2 + 3 * 4\")"
+                            , HaskellLine
+                                "print $ \"(2 + 3) * 4 = \" ++ show (evalExpr \"(2 + 3) * 4\")"
+                            ]
+                length (splitBlocks result) @?= 2
+            , testCase "record update ' = ' inside braces stays an action" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "print cfg { retries = 3 }"
+                            , HaskellLine "print cfg { retries = 4 }"
+                            ]
+                length (splitBlocks result) @?= 2
+            , testCase "a real binding whose RHS is a string still merges" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "label = \"x = y\""
+                            , Blank
+                            , HaskellLine "caption = label ++ \"!\""
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "trailing '=' at depth 0 is still a binding head" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "longDef ="
+                            , HaskellLine "  \"value\""
+                            ]
+                length (splitBlocks result) @?= 1
             ]
         , testGroup
             "Mixed block splitting"
@@ -325,14 +412,17 @@ renderTests =
                             , HaskellLine "do"
                             , HaskellLine "  let testPrimes = primesUpTo 10"
                             ]
+                -- The three commented declaration sections merge into ONE
+                -- block (they may be mutually recursive); the trailing do
+                -- action stays its own block.
                 let blocks = splitBlocks result
                 assertBool
-                    ( "expected 4 blocks (one per logical section), got "
+                    ( "expected 2 blocks (merged decls + do action), got "
                         ++ show (length blocks)
                         ++ ": "
                         ++ show blocks
                     )
-                    (length blocks == 4)
+                    (length blocks == 2)
             ]
         , testGroup
             "Comments"
@@ -410,6 +500,20 @@ taggedTests =
                         ]
             length (splitBlocks result) @?= 1
             linePragmasIn result @?= ["{-# LINE 5 \"cell\" #-}"]
+        , testCase "decls merged across a blank + comment gap keep one true pragma" $ do
+            let result =
+                    toGhciScriptTagged
+                        "cell"
+                        [ (5, HaskellLine "f = g + 1")
+                        , (6, Blank)
+                        , (7, HaskellLine "-- helper")
+                        , (8, HaskellLine "g = 2")
+                        ]
+            length (splitBlocks result) @?= 1
+            linePragmasIn result @?= ["{-# LINE 5 \"cell\" #-}"]
+            -- Gap lines preserved: g's diagnostic must still map to line 8.
+            splitBlocks result
+                @?= [["{-# LINE 5 \"cell\" #-}", "f = g + 1", "", "-- helper", "g = 2"]]
         , testCase "comment attaching forward uses the comment's line number" $ do
             let result =
                     toGhciScriptTagged

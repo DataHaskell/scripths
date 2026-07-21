@@ -36,7 +36,7 @@ module ScriptHs.Render (
     unRewriteSplice,
 ) where
 
-import Data.Bifunctor (second)
+import Data.Bifunctor (first, second)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.List (intercalate)
 import Data.Maybe
@@ -257,8 +257,27 @@ isHaskellKeyword t =
                , "infixr"
                ]
 
+{- | A standalone @=@ at bracket depth 0 outside string literals — the
+discriminator between a value binding and an expression whose string content
+happens to contain @\" = \"@ (a labelled print) or a record update's field
+assignment.
+-}
 hasTopLevelEquals :: Text -> Bool
-hasTopLevelEquals t = " = " `T.isInfixOf` t || T.isSuffixOf " =" t
+hasTopLevelEquals = go (0 :: Int) . T.unpack
+  where
+    go 0 (' ' : '=' : rest)
+        | null rest || head rest == ' ' = True
+    go d ('\\' : _ : cs) = go d cs
+    go d ('"' : cs) = go d (dropString cs)
+    go d (c : cs)
+        | c `elem` ("([{" :: String) = go (d + 1) cs
+        | c `elem` (")]}" :: String) = go (max 0 (d - 1)) cs
+        | otherwise = go d cs
+    go _ [] = False
+    dropString ('\\' : _ : cs) = dropString cs
+    dropString ('"' : cs) = cs
+    dropString (_ : cs) = dropString cs
+    dropString [] = []
 
 isCommentText :: Text -> Bool
 isCommentText t = "--" `T.isPrefixOf` T.stripStart t
@@ -271,12 +290,19 @@ single unit. Shared by 'toGhciScript' (block wrapping) and 'toModule'
 mergePieces :: [Piece] -> [Piece]
 mergePieces (PUnit KComment l1 : PUnit k l2 : rest)
     | k /= KComment = mergePieces (PUnit k (l1 ++ l2) : rest)
-mergePieces (PUnit KDeclaration l1 : PUnit KDeclaration l2 : rest) =
-    mergePieces (PUnit KDeclaration (l1 ++ l2) : rest)
-mergePieces (PUnit KDeclaration l1 : PBlank : PUnit KDeclaration l2 : rest) =
-    mergePieces (PUnit KDeclaration (l1 ++ l2) : rest)
+mergePieces (PUnit KDeclaration l1 : rest)
+    | Just (l2, rest') <- declContinuation rest =
+        mergePieces (PUnit KDeclaration (l1 ++ l2) : rest')
 mergePieces (p : rest) = p : mergePieces rest
 mergePieces [] = []
+
+declContinuation :: [Piece] -> Maybe ([Line], [Piece])
+declContinuation = go False
+  where
+    go _ (PUnit KDeclaration l : r) = Just (l, r)
+    go False (PBlank : r) = first (Blank :) <$> go True r
+    go _ (PUnit KComment lc : r) = first (lc ++) <$> go False r
+    go _ _ = Nothing
 
 piecesToBlocks :: [Piece] -> [Block]
 piecesToBlocks = map pieceToBlock . mergePieces
@@ -310,10 +336,10 @@ earliest line so a tagged block points at where the unit began.
 mergeNumberedPieces :: [(Int, Piece)] -> [(Int, Piece)]
 mergeNumberedPieces ((i, PUnit KComment l1) : (_, PUnit k l2) : rest)
     | k /= KComment = mergeNumberedPieces ((i, PUnit k (l1 ++ l2)) : rest)
-mergeNumberedPieces ((i, PUnit KDeclaration l1) : (_, PUnit KDeclaration l2) : rest) =
-    mergeNumberedPieces ((i, PUnit KDeclaration (l1 ++ l2)) : rest)
-mergeNumberedPieces ((i, PUnit KDeclaration l1) : (_, PBlank) : (_, PUnit KDeclaration l2) : rest) =
-    mergeNumberedPieces ((i, PUnit KDeclaration (l1 ++ l2)) : rest)
+mergeNumberedPieces ((i, PUnit KDeclaration l1) : rest)
+    | Just (l2, rest') <- declContinuation (map snd rest) =
+        mergeNumberedPieces
+            ((i, PUnit KDeclaration (l1 ++ l2)) : drop (length rest - length rest') rest)
 mergeNumberedPieces (p : rest) = p : mergeNumberedPieces rest
 mergeNumberedPieces [] = []
 
