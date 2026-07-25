@@ -31,7 +31,9 @@ module ScriptHs.Render (
     Kind (..),
     Piece (..),
     toPieces,
+    mergePieces,
     classify,
+    bindStatementBody,
     lineText,
     unRewriteSplice,
 ) where
@@ -160,8 +162,44 @@ isTHSplice t =
     let s = T.stripStart t
      in "$(" `T.isPrefixOf` s || "_ = ();" `T.isPrefixOf` s
 
+{- | A statement binds monadically when @<-@ separates a pattern from an
+expression at the STATEMENT level. Defined through 'bindStatementBody' so the
+classifier and the extractor can never disagree about which arrow binds.
+-}
 isIOBindLead :: Text -> Bool
-isIOBindLead = T.isInfixOf "<-"
+isIOBindLead = isJust . bindStatementBody
+
+{- | The expression a monadic bind runs, with its pattern dropped: the text
+after the statement-level @<-@, or 'Nothing' when the line binds nothing. An
+arrow nested inside brackets belongs to a list comprehension or an inline
+@do@, and one inside a literal is text; neither binds a name a caller can use.
+-}
+bindStatementBody :: Text -> Maybe Text
+bindStatementBody = scan (0 :: Int)
+  where
+    scan depth t = case T.uncons t of
+        Nothing -> Nothing
+        Just ('"', rest) -> scan depth (skipString rest)
+        Just ('\'', rest) -> scan depth (skipChar rest)
+        Just ('<', rest)
+            | depth == 0
+            , Just body <- T.stripPrefix "-" rest ->
+                Just (T.strip body)
+        Just (c, rest)
+            | c `elem` ("([{" :: String) -> scan (depth + 1) rest
+            | c `elem` (")]}" :: String) -> scan (depth - 1) rest
+            | otherwise -> scan depth rest
+    skipString t = case T.uncons t of
+        Nothing -> t
+        Just ('\\', rest) -> skipString (T.drop 1 rest)
+        Just ('"', rest) -> rest
+        Just (_, rest) -> skipString rest
+    -- A quote opens a character literal only when one closes it right after
+    -- the character; otherwise it is a prime in an identifier like @xs'@.
+    skipChar t = case T.uncons t of
+        Just ('\\', rest) -> T.drop 1 (T.dropWhile (/= '\'') rest)
+        Just (_, rest) | "'" `T.isPrefixOf` rest -> T.drop 1 rest
+        _ -> t
 
 isDeclaration :: Text -> [Text] -> Bool
 isDeclaration leadText contTexts =

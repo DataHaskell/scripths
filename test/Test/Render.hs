@@ -7,16 +7,20 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import ScriptHs.Parser (CabalMeta (..), Line (..))
 import ScriptHs.Render (
+    Kind (..),
     LhsBlock (..),
     ModuleParts (..),
+    Piece (..),
     TrailKind (..),
     actionExprs,
+    bindStatementBody,
     renderCabalScriptHeader,
     renderLiterate,
     renderModuleText,
     toGhciScript,
     toGhciScriptTagged,
     toModule,
+    toPieces,
  )
 
 renderTests :: TestTree
@@ -43,6 +47,57 @@ renderTests =
             , testCase "blank line preserved" $ do
                 let result = toGhciScript [Blank]
                 assertBool "has blank" (T.isInfixOf "\n\n" result || result == "\n")
+            ]
+        , testGroup
+            "Monadic-bind classification: only a top-level `<-` binds"
+            [ testCase "plain bind" $
+                kindOf "x <- getLine" @?= Just KIOBind
+            , testCase "pattern bind" $
+                kindOf "Just y <- pure (Just 1)" @?= Just KIOBind
+            , testCase "tuple pattern bind" $
+                kindOf "(a, b) <- pure (1, 2)" @?= Just KIOBind
+            , testCase "bind whose rhs holds a comprehension" $
+                kindOf "ys <- pure [y | y <- [1, 2]]" @?= Just KIOBind
+            , -- The live_test19 regression: a list comprehension's `<-` sits
+              -- inside brackets and binds nothing at the statement level.
+              testCase "comprehension is an action, not a bind" $
+                kindOf "print [(x, sin x) | x <- [0, 0.01 .. 2]]" @?= Just KAction
+            , testCase "comprehension inside a lambda is an action" $
+                kindOf "animate 0 (\\t -> plot [(x, sin x) | x <- xs])"
+                    @?= Just KAction
+            , testCase "one-line do block is an action" $
+                kindOf "mapM_ (\\n -> do { m <- pure n; print m }) [1]"
+                    @?= Just KAction
+            , testCase "arrow inside a string literal is an action" $
+                kindOf "putStrLn \"x <- y\"" @?= Just KAction
+            ]
+        , testGroup
+            "bindStatementBody: the expression a bind runs"
+            [ testCase "drops a plain pattern" $
+                bindStatementBody "x <- getLine" @?= Just "getLine"
+            , testCase "drops a tuple pattern" $
+                bindStatementBody "(a, b) <- pure (1, 2)" @?= Just "pure (1, 2)"
+            , testCase "keeps a comprehension in the bound expression" $
+                bindStatementBody "ys <- pure [y | y <- [1, 2]]"
+                    @?= Just "pure [y | y <- [1, 2]]"
+            , testCase "a non-bind has no body" $
+                bindStatementBody "print [(x, y) | x <- xs]" @?= Nothing
+            , -- The classifier and the extractor must never disagree: a line
+              -- classified KIOBind is exactly one with a statement body.
+              testCase "agrees with the classifier" $
+                mapM_
+                    ( \t ->
+                        assertBool
+                            (T.unpack t)
+                            ((kindOf t == Just KIOBind) == (bindStatementBody t /= Nothing))
+                    )
+                    [ "x <- getLine"
+                    , "Just y <- pure (Just 1)"
+                    , "ys <- pure [y | y <- [1, 2]]"
+                    , "print [(x, sin x) | x <- [0, 1]]"
+                    , "animate 0 (\\t -> plot [(x, y) | x <- xs])"
+                    , "putStrLn \"x <- y\""
+                    ]
             ]
         , testGroup
             "Isolation: one block per statement"
@@ -641,6 +696,12 @@ splitBlocks = go . T.lines
 
 nonEmpty :: Text -> [Text]
 nonEmpty = filter (not . T.null . T.strip) . T.lines
+
+-- | The 'Kind' 'toPieces' assigns a single Haskell line.
+kindOf :: Text -> Maybe Kind
+kindOf src = case toPieces [HaskellLine src] of
+    [PUnit k _] -> Just k
+    _ -> Nothing
 
 assertNotWrapped :: Text -> Assertion
 assertNotWrapped t =
