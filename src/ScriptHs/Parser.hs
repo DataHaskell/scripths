@@ -88,6 +88,22 @@ data CabalMeta = CabalMeta
     }
     deriving (Show, Eq)
 
+instance Semigroup CabalMeta where
+    a <> b =
+        CabalMeta
+            { metaDeps = metaDeps a <> metaDeps b
+            , metaExts = metaExts a <> metaExts b
+            , metaGhcOptions = metaGhcOptions a <> metaGhcOptions b
+            , metaExtraLibDirs = metaExtraLibDirs a <> metaExtraLibDirs b
+            , metaExtraIncludeDirs = metaExtraIncludeDirs a <> metaExtraIncludeDirs b
+            , metaPackages = metaPackages a <> metaPackages b
+            , metaSourceRepos = metaSourceRepos a <> metaSourceRepos b
+            , metaUnknownKeys = metaUnknownKeys a <> metaUnknownKeys b
+            }
+
+instance Monoid CabalMeta where
+    mempty = CabalMeta [] [] [] [] [] [] [] []
+
 {- | A git @source-repository-package@ pin, declared with
 
 @
@@ -178,18 +194,9 @@ data RawLine
     | RawCompile CompileDirective
     | RawCode Line
 
+-- | Field-wise concatenation of every directive's contribution.
 mergeMetas :: [CabalMeta] -> CabalMeta
-mergeMetas ms =
-    CabalMeta
-        { metaDeps = concatMap metaDeps ms
-        , metaExts = concatMap metaExts ms
-        , metaGhcOptions = concatMap metaGhcOptions ms
-        , metaExtraLibDirs = concatMap metaExtraLibDirs ms
-        , metaExtraIncludeDirs = concatMap metaExtraIncludeDirs ms
-        , metaPackages = concatMap metaPackages ms
-        , metaSourceRepos = concatMap metaSourceRepos ms
-        , metaUnknownKeys = concatMap metaUnknownKeys ms
-        }
+mergeMetas = mconcat
 
 parseLine :: Text -> RawLine
 parseLine line
@@ -230,17 +237,7 @@ parseCabalMeta line = do
                 other -> emptyCabal{metaUnknownKeys = [other]}
         _ -> Nothing
   where
-    emptyCabal =
-        CabalMeta
-            { metaDeps = []
-            , metaExts = []
-            , metaGhcOptions = []
-            , metaExtraLibDirs = []
-            , metaExtraIncludeDirs = []
-            , metaPackages = []
-            , metaSourceRepos = []
-            , metaUnknownKeys = []
-            }
+    emptyCabal = mempty :: CabalMeta
 
 {- | Parse a @source-repository-package@ value: whitespace-separated
 @\<location\> \<ref\> [subdir]@ (not comma-separated like the other directives).

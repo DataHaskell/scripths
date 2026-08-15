@@ -70,6 +70,14 @@ renderTests =
                     @?= Just KAction
             , testCase "arrow inside a string literal is an action" $
                 kindOf "putStrLn \"x <- y\"" @?= Just KAction
+            , testCase "arrow behind an escaped quote is still in the string" $
+                kindOf "putStrLn \"he said \\\"x <- y\\\"\"" @?= Just KAction
+            , testCase "arrow inside a trailing comment is not a bind" $
+                kindOf "putStrLn \"done\" -- then: x <- readLn" @?= Just KAction
+            , testCase "an operator containing <- is not a bind" $
+                kindOf "v1 <-> v2" @?= Just KAction
+            , testCase "defining an operator containing <- is not a bind" $
+                kindOf "(<->) = undefined" @?= Just KAction
             ]
         , testGroup
             "bindStatementBody: the expression a bind runs"
@@ -82,6 +90,10 @@ renderTests =
                     @?= Just "pure [y | y <- [1, 2]]"
             , testCase "a non-bind has no body" $
                 bindStatementBody "print [(x, y) | x <- xs]" @?= Nothing
+            , testCase "drops a trailing comment from the body" $
+                bindStatementBody "x <- readLn -- setup" @?= Just "readLn"
+            , testCase "an operator containing <- has no body" $
+                bindStatementBody "v1 <-> v2" @?= Nothing
             , -- The classifier and the extractor must never disagree: a line
               -- classified KIOBind is exactly one with a statement body.
               testCase "agrees with the classifier" $
@@ -367,6 +379,23 @@ renderTests =
                             , HaskellLine "  \"value\""
                             ]
                 length (splitBlocks result) @?= 1
+            , testCase "bracket in a char literal does not hide a guard's binding" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "describe c"
+                            , HaskellLine "  | c == '(' = \"open\""
+                            , Blank
+                            , HaskellLine "isParen c = describe c /= \"\""
+                            ]
+                length (splitBlocks result) @?= 1
+            , testCase "'=' inside a trailing comment is not a binding" $ do
+                let result =
+                        toGhciScript
+                            [ HaskellLine "y = 2"
+                            , Blank
+                            , HaskellLine "print y -- expected = 2"
+                            ]
+                length (splitBlocks result) @?= 2
             ]
         , testGroup
             "Mixed block splitting"
@@ -662,7 +691,7 @@ moduleTests =
             assertBool "indents print 1" (T.isInfixOf "    print 1" txt)
         , testCase "cabal-script header includes base + Wno-unused-imports" $ do
             let hdr =
-                    renderCabalScriptHeader (CabalMeta ["dataframe", "text"] [] [] [] [] [] [] [])
+                    renderCabalScriptHeader (mempty{metaDeps = ["dataframe", "text"]})
             assertBool "opens block" (T.isInfixOf "{- cabal:" hdr)
             assertBool
                 "base + deps"

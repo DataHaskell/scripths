@@ -28,6 +28,8 @@ import ScriptHs.Parser (Line (..))
 import ScriptHs.Render (
     Kind (..),
     Piece (..),
+    dedup,
+    languagePragma,
     linePragma,
     lineText,
     numberedPieces,
@@ -159,14 +161,3 @@ renderCompiledModule modName defaultExts extraImports chunks =
         , k `elem` [KComment, KDeclaration, KTHSplice]
         ]
     declLines = T.lines . unRewriteSplice . T.intercalate "\n" . map lineText
-
-languagePragma :: Text -> Text
-languagePragma ext = "{-# LANGUAGE " <> ext <> " #-}"
-
-dedup :: [Text] -> [Text]
-dedup = go []
-  where
-    go _ [] = []
-    go seen (x : xs)
-        | x `elem` seen = go seen xs
-        | otherwise = x : go (x : seen) xs

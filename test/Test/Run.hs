@@ -17,7 +17,7 @@ import ScriptHs.Run (
  )
 
 emptyMeta :: CabalMeta
-emptyMeta = CabalMeta [] [] [] [] [] [] [] []
+emptyMeta = mempty
 
 runTests :: TestTree
 runTests =

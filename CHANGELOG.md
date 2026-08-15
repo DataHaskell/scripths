@@ -1,8 +1,18 @@
 # Revision history for scripths
 
 
+## 0.5.4.2 -- 2026-08-13
+* fixes heuristic to parse binds.
+* declarations separated by a single blank line and/or comment lines merge into one `:{ … :}` block, so mutually recursive definitions with commented section headers load together. A double blank line still splits blocks.
+
 ## 0.5.3.1 -- 2026-06-28
 * Merge consecutive blank lines.
+
+## 0.5.3.0 -- 2026-06-23
+* **Line-numbered errors**: every rendered block carries a `{-# LINE #-}`
+  pragma with its original source line, so GHC diagnostics point at the real
+  line in your script or notebook cell instead of a position inside the
+  generated GHCi input.
 
 ## 0.5.2.0 -- 2026-06-16
 * **Styling with `RenderOptions`.** You can now have the output quoted vs unquoted
@@ -11,8 +21,8 @@
 * **Blank-line fix**: whitespace-only prose between two code fences no longer
   becomes a spurious empty prose segment.
 
-## 0.4.1.0 -- 2056-05-31
-* **Custom-prelude support**: auto print (our hook to rout evething but strings to shw)
+## 0.4.1.0 -- 2026-05-31
+* **Custom-prelude support**: auto print (our hook to route everything but strings to show)
   now doesn't assume a prelude.
 * **Cleaner error rendering** (notebooks): don't leak internals when printing errors.
 * **UTF-8 output**: captured notebook output is decoded as UTF-8.
@@ -33,7 +43,7 @@
 * **`scripths --version` / `-v`** prints the scripths version.
 
 ## 0.4.0.1 -- 2026-05-30
-* Parse pandoc markdown code fences as haskel code fences.
+* Parse pandoc markdown code fences as Haskell code fences.
 
 ## 0.4.0.0 -- 2026-05-29
 
@@ -101,7 +111,7 @@
 
 ## 0.1.0.1 -- 2026-02-24
 
-* Fix code new ine behaviour for code fencing.
+* Fix code newline behaviour for code fencing.
 
 ## 0.1.0.0 -- YYYY-mm-dd
 

@@ -32,10 +32,15 @@ module ScriptHs.Render (
     Piece (..),
     toPieces,
     mergePieces,
-    classify,
-    bindStatementBody,
     lineText,
     unRewriteSplice,
+
+    -- * Shared rendering helpers
+    dedup,
+    languagePragma,
+
+    -- * Internals exposed for testing
+    bindStatementBody,
 ) where
 
 import Data.Bifunctor (first, second)
@@ -44,6 +49,7 @@ import Data.List (intercalate)
 import Data.Maybe
 import Data.Text (Text)
 import qualified Data.Text as T
+import ScriptHs.Lex (isSymbolChar, maskNested, stripLineComment)
 import ScriptHs.Parser (CabalMeta (..), Line (..), SourceRepoPin (..))
 
 data Block
@@ -58,8 +64,9 @@ Classification rules:
 * A run of @--@ comment lines forms a 'KComment' unit that attaches
   forward to the next non-comment unit.
 * A type signature, value binding, or clause-head-with-guards forms a
-  'KDeclaration' unit; consecutive declarations merge into a single
-  @:{ … :}@ block.
+  'KDeclaration' unit; declarations separated by at most a single blank
+  line and\/or comment lines merge into a single @:{ … :}@ block (a
+  double blank line splits).
 * A monadic bind (@<-@ on the lead line) forms a 'KIOBind' unit; each
   such unit is its own block.
 * A Template Haskell splice (@$(…)@ or the rewritten @_ = (); …@ form)
@@ -81,6 +88,7 @@ toGhciScriptTagged :: Text -> [(Int, Line)] -> Text
 toGhciScriptTagged tag =
     T.unlines . concatMap (renderBlockTagged tag) . numberedBlocks
 
+-- | The statement-level classification of a logical unit of lines.
 data Kind
     = KComment
     | KDeclaration
@@ -89,6 +97,7 @@ data Kind
     | KTHSplice
     deriving (Show, Eq)
 
+-- | One element of a parsed line stream: a classified unit or a bare line.
 data Piece
     = PBlank
     | PGhciCommand Text
@@ -97,6 +106,7 @@ data Piece
     | PUnit Kind [Line]
     deriving (Show)
 
+-- | Group lines into logical units (lead + continuations) and classify each.
 toPieces :: [Line] -> [Piece]
 toPieces [] = []
 toPieces (Blank : rest) = PBlank : toPieces rest
@@ -150,6 +160,7 @@ isBlankLine :: Line -> Bool
 isBlankLine Blank = True
 isBlankLine _ = False
 
+-- | The 'Kind' of a unit, from its lead line and continuation lines.
 classify :: Text -> [Text] -> Kind
 classify leadText contTexts
     | isTHSplice leadText = KTHSplice
@@ -164,7 +175,7 @@ isTHSplice t =
 
 {- | A statement binds monadically when @<-@ separates a pattern from an
 expression at the STATEMENT level. Defined through 'bindStatementBody' so the
-classifier and the extractor can never disagree about which arrow binds.
+classifier and the body extraction can never disagree about which arrow binds.
 -}
 isIOBindLead :: Text -> Bool
 isIOBindLead = isJust . bindStatementBody
@@ -172,34 +183,23 @@ isIOBindLead = isJust . bindStatementBody
 {- | The expression a monadic bind runs, with its pattern dropped: the text
 after the statement-level @<-@, or 'Nothing' when the line binds nothing. An
 arrow nested inside brackets belongs to a list comprehension or an inline
-@do@, and one inside a literal is text; neither binds a name a caller can use.
+@do@, one inside a literal or comment is text, and one extended by symbol
+characters (@<->@) is an operator; none binds a name.
 -}
 bindStatementBody :: Text -> Maybe Text
-bindStatementBody = scan (0 :: Int)
+bindStatementBody t = body <$> findArrow 0
   where
-    scan depth t = case T.uncons t of
-        Nothing -> Nothing
-        Just ('"', rest) -> scan depth (skipString rest)
-        Just ('\'', rest) -> scan depth (skipChar rest)
-        Just ('<', rest)
-            | depth == 0
-            , Just body <- T.stripPrefix "-" rest ->
-                Just (T.strip body)
-        Just (c, rest)
-            | c `elem` ("([{" :: String) -> scan (depth + 1) rest
-            | c `elem` (")]}" :: String) -> scan (depth - 1) rest
-            | otherwise -> scan depth rest
-    skipString t = case T.uncons t of
-        Nothing -> t
-        Just ('\\', rest) -> skipString (T.drop 1 rest)
-        Just ('"', rest) -> rest
-        Just (_, rest) -> skipString rest
-    -- A quote opens a character literal only when one closes it right after
-    -- the character; otherwise it is a prime in an identifier like @xs'@.
-    skipChar t = case T.uncons t of
-        Just ('\\', rest) -> T.drop 1 (T.dropWhile (/= '\'') rest)
-        Just (_, rest) | "'" `T.isPrefixOf` rest -> T.drop 1 rest
-        _ -> t
+    stripped = stripLineComment t
+    masked = maskNested stripped
+    body i = T.strip (T.drop (i + 2) stripped)
+    findArrow i = case T.breakOn "<-" (T.drop i masked) of
+        (_, "") -> Nothing
+        (pre, _) ->
+            let j = i + T.length pre
+             in if standaloneArrow j then Just j else findArrow (j + 2)
+    standaloneArrow j = not (symbolAt (j - 1)) && not (symbolAt (j + 2))
+    symbolAt k =
+        k >= 0 && k < T.length masked && isSymbolChar (T.index masked k)
 
 isDeclaration :: Text -> [Text] -> Bool
 isDeclaration leadText contTexts =
@@ -295,51 +295,40 @@ isHaskellKeyword t =
                , "infixr"
                ]
 
-{- | A standalone @=@ at bracket depth 0 outside string literals — the
-discriminator between a value binding and an expression whose string content
-happens to contain @\" = \"@ (a labelled print) or a record update's field
-assignment.
+{- | A standalone @=@ at bracket depth 0 outside literals and comments — the
+discriminator between a value binding and an expression whose nested text
+happens to contain an @=@ (a labelled print, a record update's field
+assignment, a trailing comment).
 -}
 hasTopLevelEquals :: Text -> Bool
-hasTopLevelEquals = go (0 :: Int) . T.unpack
+hasTopLevelEquals t =
+    " = " `T.isInfixOf` masked || " =" `T.isSuffixOf` T.stripEnd masked
   where
-    go 0 (' ' : '=' : rest)
-        | null rest || head rest == ' ' = True
-    go d ('\\' : _ : cs) = go d cs
-    go d ('"' : cs) = go d (dropString cs)
-    go d (c : cs)
-        | c `elem` ("([{" :: String) = go (d + 1) cs
-        | c `elem` (")]}" :: String) = go (max 0 (d - 1)) cs
-        | otherwise = go d cs
-    go _ [] = False
-    dropString ('\\' : _ : cs) = dropString cs
-    dropString ('"' : cs) = cs
-    dropString (_ : cs) = dropString cs
-    dropString [] = []
+    masked = maskNested (stripLineComment t)
 
 isCommentText :: Text -> Bool
 isCommentText t = "--" `T.isPrefixOf` T.stripStart t
 
 {- | Normalize a piece stream: attach each comment unit forward onto the
-following non-comment unit, and merge runs of adjacent declarations into a
-single unit. Shared by 'toGhciScript' (block wrapping) and 'toModule'
-(bucketing) so both see identical grouping.
+following non-comment unit, and merge declarations separated by at most a
+single blank line and\/or comment lines into a single unit. Shared by
+'toGhciScript' (block wrapping) and 'toModule' (bucketing) so both see
+identical grouping. Defined through 'mergeNumberedPieces' so the two can
+never diverge.
 -}
 mergePieces :: [Piece] -> [Piece]
-mergePieces (PUnit KComment l1 : PUnit k l2 : rest)
-    | k /= KComment = mergePieces (PUnit k (l1 ++ l2) : rest)
-mergePieces (PUnit KDeclaration l1 : rest)
-    | Just (l2, rest') <- declContinuation rest =
-        mergePieces (PUnit KDeclaration (l1 ++ l2) : rest')
-mergePieces (p : rest) = p : mergePieces rest
-mergePieces [] = []
+mergePieces = map snd . mergeNumberedPieces . zip [0 ..]
 
-declContinuation :: [Piece] -> Maybe ([Line], [Piece])
+{- | The declaration unit continuing the current one across at most a single
+blank line and\/or comment runs; the gap lines are kept in the merged unit so
+line counts (and any LINE pragma) stay true.
+-}
+declContinuation :: [(Int, Piece)] -> Maybe ([Line], [(Int, Piece)])
 declContinuation = go False
   where
-    go _ (PUnit KDeclaration l : r) = Just (l, r)
-    go False (PBlank : r) = first (Blank :) <$> go True r
-    go _ (PUnit KComment lc : r) = first (lc ++) <$> go False r
+    go _ ((_, PUnit KDeclaration l) : r) = Just (l, r)
+    go False ((_, PBlank) : r) = first (Blank :) <$> go True r
+    go _ ((_, PUnit KComment lc) : r) = first (lc ++) <$> go False r
     go _ _ = Nothing
 
 piecesToBlocks :: [Piece] -> [Block]
@@ -368,16 +357,15 @@ numberedPieces nls = go nls (toPieces (map snd nls))
     pieceLen (PUnit _ ls) = length ls
     pieceLen _ = 1
 
-{- | 'mergePieces' carrying each piece's first source line; a merge keeps the
-earliest line so a tagged block points at where the unit began.
+{- | The one merge implementation, carrying each piece's first source line; a
+merge keeps the earliest line so a tagged block points at where the unit began.
 -}
 mergeNumberedPieces :: [(Int, Piece)] -> [(Int, Piece)]
 mergeNumberedPieces ((i, PUnit KComment l1) : (_, PUnit k l2) : rest)
     | k /= KComment = mergeNumberedPieces ((i, PUnit k (l1 ++ l2)) : rest)
 mergeNumberedPieces ((i, PUnit KDeclaration l1) : rest)
-    | Just (l2, rest') <- declContinuation (map snd rest) =
-        mergeNumberedPieces
-            ((i, PUnit KDeclaration (l1 ++ l2)) : drop (length rest - length rest') rest)
+    | Just (l2, rest') <- declContinuation rest =
+        mergeNumberedPieces ((i, PUnit KDeclaration (l1 ++ l2)) : rest')
 mergeNumberedPieces (p : rest) = p : mergeNumberedPieces rest
 mergeNumberedPieces [] = []
 
@@ -415,6 +403,7 @@ wrapTagged tag i ls = ":{" : linePragma i tag : ls ++ [":}"]
 linePragma :: Int -> Text -> Text
 linePragma n tag = "{-# LINE " <> T.pack (show n) <> " \"" <> tag <> "\" #-}"
 
+-- | A line's raw text (empty for 'Blank').
 lineText :: Line -> Text
 lineText Blank = ""
 lineText (GhciCommand t) = t

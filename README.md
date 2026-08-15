@@ -24,10 +24,12 @@ cabal install scripths
 ## CLI Usage
 
 ```
-scripths [-o FILE | --output=FILE] [-i | --in-place] [-p DIR | --package DIR]... [--no-local-project] [-h | --help] [-v | --version] <script>
+scripths [-o FILE | --output=FILE] [-i | --in-place] [-p DIR | --package DIR]... [--no-local-project] [--code-style=display|remove] [--output-style=quoted|raw] [-h | --help] [-v | --version] <script>
 ```
 
 When `-o` / `--output` is provided for Markdown files, the result is written to that path. Otherwise it is printed to stdout. With `-i` / `--in-place` the notebook is rewritten in place: any previously rendered output is stripped and replaced, and re-running is idempotent (it does not accumulate blank lines). `-i` is only valid for `.md` / `.markdown` notebooks and cannot be combined with `-o`.
+
+Rendered notebooks can be styled: `--code-style=remove` omits the code fences from the output (results only, e.g. for exporting a report), and `--output-style=raw` emits captured output verbatim instead of as a block quote. The defaults are `display` and `quoted`.
 
 The file extension determines the mode. `.ghci` / `hs` files are parsed and executed as a standalone GHCi script. `.md` / `.markdown` files are processed as a notebook with captured output. Run `scripths --help` for the full option and directive list, or `scripths --version` to print the version.
 
@@ -126,7 +128,7 @@ You can declare dependencies, language extensions, and GHC options directly insi
 -- cabal: source-repository-package: https://github.com/owner/repo v1.2.3
 ```
 
-The recognised keys are `build-depends`, `default-extensions`, `ghc-options`, `packages` (extra local package directories, relative to the script), and `source-repository-package`. An unrecognised key is reported as a warning.
+The recognised keys are `build-depends`, `default-extensions`, `ghc-options`, `packages` (extra local package directories, relative to the script), `source-repository-package`, `extra-lib-dirs`, and `extra-include-dirs`. An unrecognised key is reported as a warning.
 
 `OverloadedStrings` is enabled in every scripths repl by default, so string literals work directly as `Text` / `ByteString`; add any further extensions with `default-extensions`.
 
