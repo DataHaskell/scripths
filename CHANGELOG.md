@@ -1,6 +1,11 @@
 # Revision history for scripths
 
 
+## 0.5.5.0 -- 2026-08-15
+* An untagged code fence (bare ```` ``` ````) is no longer a code block: it
+  stays prose, verbatim. Only fences with an explicit language tag parse as
+  `CodeBlock`; there is no language to execute an untagged fence under.
+
 ## 0.5.4.2 -- 2026-08-13
 * fixes heuristic to parse binds.
 * declarations separated by a single blank line and/or comment lines merge into one `:{ … :}` block, so mutually recursive definitions with commented section headers load together. A double blank line still splits blocks.

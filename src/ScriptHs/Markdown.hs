@@ -112,13 +112,15 @@ fence :: Text
 fence = "```"
 
 {- | The language tag of a code-fence /opener/, or 'Nothing' if the line is not
-one. A fence is /exactly/ three backticks (optionally followed by a language
-tag) — a line of four or more backticks is not a fence and stays prose.
+one. Only /exactly/ three backticks followed by a language tag open a block:
+an untagged fence has no language to execute under and stays prose, and four
+or more backticks are not a fence at all.
 -}
 fenceLang :: Text -> Maybe Text
 fenceLang line = do
     rest <- T.stripPrefix fence line
-    if "`" `T.isPrefixOf` rest then Nothing else Just (T.strip rest)
+    let tag = T.strip rest
+    if "`" `T.isPrefixOf` rest || T.null tag then Nothing else Just tag
 
 {- | The HTML-comment marker that tags a code block's rendered output with its
 MIME type. We render the @scripths:mime@ form; for backward compatibility we

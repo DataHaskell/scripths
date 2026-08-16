@@ -76,6 +76,46 @@ markdownTests =
                 case segs of
                     [CodeBlock "haskell" _ _] -> pure ()
                     other -> assertFailure $ "expected [CodeBlock haskell], got: " ++ show other
+            , testCase "an untagged fence stays prose" $ do
+                let input =
+                        T.unlines
+                            [ "Some text."
+                            , ""
+                            , "```"
+                            , "plain text, not code"
+                            , "```"
+                            ]
+                case parseMarkdown input of
+                    [Prose t] ->
+                        assertBool
+                            "fence kept verbatim"
+                            (T.isInfixOf "```\nplain text, not code\n```" t)
+                    other -> assertFailure $ "expected [Prose], got: " ++ show other
+            , testCase "an untagged fence round-trips verbatim" $ do
+                let input =
+                        T.unlines
+                            [ "Some text."
+                            , ""
+                            , "```"
+                            , "plain text"
+                            , "```"
+                            ]
+                reassemble (parseMarkdown input) @?= input
+            , testCase "a tagged fence after an untagged one still parses" $ do
+                let input =
+                        T.unlines
+                            [ "```"
+                            , "plain"
+                            , "```"
+                            , ""
+                            , "```haskell"
+                            , "print 42"
+                            , "```"
+                            ]
+                case parseMarkdown input of
+                    [Prose _, CodeBlock "haskell" code _] ->
+                        assertBool "has print 42" (T.isInfixOf "print 42" code)
+                    other -> assertFailure $ "expected [Prose, CodeBlock haskell], got: " ++ show other
             , testCase "prose then code" $ do
                 let input =
                         T.unlines
